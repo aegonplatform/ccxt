@@ -30,7 +30,7 @@ module.exports = class okex3 extends Exchange {
                 'fetchOrderBook': true,
                 'fetchOrderBooks': false,
                 'fetchTradingLimits': false,
-                'withdraw': false,
+                'withdraw': true,
                 'fetchCurrencies': false,
             },
             'timeframes': {
@@ -73,6 +73,9 @@ module.exports = class okex3 extends Exchange {
                 'account': {
                     'get': [
                         'wallet',
+                    ],
+                    'post': [
+                        'withdrawal',
                     ],
                 },
             },
@@ -477,5 +480,21 @@ module.exports = class okex3 extends Exchange {
             'Content-Type': 'application/json',
         };
         return { 'url': url, 'method': method, 'body': body, 'headers': headers };
+    }
+
+    async withdraw (code, amount, address, tag = undefined, params = {}) {
+        this.checkAddress (address);
+        await this.loadMarkets ();
+        let currency = this.currency (code);
+        const request = {
+            'currency': currency['id'],
+            'amount': parseFloat (amount),
+            'to_address': address,
+        };
+        let response = await this.accountPostWithdrawal (this.extend (request, params));
+        return {
+            'info': response,
+            'id': response['withdrawal_id'],
+        };
     }
 };
