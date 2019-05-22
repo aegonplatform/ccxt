@@ -29,6 +29,7 @@ module.exports = class hitbtc2 extends hitbtc {
                 'fetchClosedOrders': true,
                 'fetchMyTrades': true,
                 'withdraw': true,
+                'fetchFundingFees': true,
                 'fetchOrderTrades': false, // not implemented yet
                 'fetchDeposits': false,
                 'fetchWithdrawals': false,
@@ -1309,6 +1310,22 @@ module.exports = class hitbtc2 extends hitbtc {
         return {
             'info': response,
             'id': response['id'],
+        };
+    }
+
+    async fetchFundingFees (codes = undefined, params = {}) {
+        let response = await this.fetchCurrencies ();
+        
+        let ids = Object.keys (response);
+        let withdrawFees = {};
+        for (let i = 0; i < ids.length; i++) {
+            let id = ids[i];
+            withdrawFees[response[id].id] = response[id].fee;
+        }
+        return {
+            'withdraw': withdrawFees,
+            'deposit': {},
+            'info': response,
         };
     }
 
