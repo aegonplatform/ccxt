@@ -46,14 +46,14 @@
   "types": "./ccxt.d.ts",
   "dependencies": {
     "bufferutil": "~3.0.0",
+    "cached-path-relative": "1.0.2",
     "cloudscraper": "1.4.1",
     "cross-env": "^5.1.4",
     "cross-spawn": "^6.0.5",
-    "cached-path-relative": "1.0.2",
     "crypto-js": "3.1.9-1",
     "fetch-ponyfill": "4.1.0",
     "opencollective": "1.0.3",
-    "pako": "^1.0.6",
+    "pako": "^1.0.10",
     "qs": "6.5.1",
     "utf-8-validate": "~4.0.0",
     "ws": "^5.1.1"

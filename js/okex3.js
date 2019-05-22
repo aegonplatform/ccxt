@@ -2,6 +2,7 @@
 
 //  ---------------------------------------------------------------------------
 
+const pako = require('pako')
 const Exchange = require ('./base/Exchange');
 const { ExchangeNotAvailable, InsufficientFunds, InvalidOrder, DDoSProtection, InvalidNonce, AuthenticationError, NotSupported } = require ('./base/errors');
 
@@ -109,7 +110,7 @@ module.exports = class okex3 extends Exchange {
                 'conx-tpls': {
                     'default': {
                         'type': 'ws',
-                        'baseurl': 'wss://real.okex.com:10441/websocket',
+                        'baseurl': 'wss://real.okex.com:10441/websocket?compress=true',
                     },
                 },
                 'methodmap': {
@@ -653,6 +654,15 @@ module.exports = class okex3 extends Exchange {
 
     _websocketOnMessage (contextId, data) {
         // console.log ('_websocketOnMsg', data);
+
+        if (!(data instanceof String)) {
+            try {
+                data = pako.inflateRaw(data, {to: 'string'});
+            } catch (err) {
+                console.log(err)
+            }
+        }
+        
         let msgs = JSON.parse (data);
         if (Array.isArray (msgs)) {
             for (let i = 0; i < msgs.length; i++) {
