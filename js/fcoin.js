@@ -125,6 +125,39 @@ module.exports = class fcoin extends Exchange {
                 'DAG': 'DAGX',
                 'PAI': 'PCHAIN',
             },
+            'wsconf': {
+                'conx-tpls': {
+                    'default': {
+                        'type': 'ws',
+                        'baseurl': 'wss://api.fcoin.com/v2/ws',
+                    },
+                },
+                'events': {
+                    'ob': {
+                        'conx-tpl': 'default',
+                        'conx-param': {
+                            'url': '{baseurl}',
+                            'id': '{id}',
+                        },
+                    },
+                    'trade': {
+                        'conx-tpl': 'default',
+                        'conx-param': {
+                            'url': '{baseurl}',
+                            'id': '{id}',
+                            'stream': '{symbol}@trade',
+                        },
+                    },
+                    'ticker': {
+                        'conx-tpl': 'default',
+                        'conx-param': {
+                            'url': '{baseurl}',
+                            'id': '{id}',
+                            'stream': '{symbol}@ticker',
+                        },
+                    },
+                },
+            },
         });
     }
 
@@ -561,5 +594,157 @@ module.exports = class fcoin extends Exchange {
                 throw new ExchangeError (feedback);
             }
         }
+    }
+
+    _websocketOnOpen (contextId, params) {
+        // : heartbeat
+        // this._websocketHeartbeatTicker && clearInterval (this._websocketHeartbeatTicker);
+        // this._websocketHeartbeatTicker = setInterval (() => {
+        //      this.websocketSendJson ({
+        //        'event': 'ping',
+        //    });
+        //  }, 30000);
+        let heartbeatTimer = this._contextGet (contextId, 'heartbeattimer');
+        if (typeof heartbeatTimer !== 'undefined') {
+            this._cancelTimer (heartbeatTimer);
+        }
+        heartbeatTimer = this._setTimer (contextId, 30000, this._websocketMethodMap ('_websocketSendHeartbeat'), [contextId]);
+        this._contextSet (contextId, 'heartbeattimer', heartbeatTimer);
+    }
+
+    _websocketSendHeartbeat (contextId) {
+        this.websocketSendJson (
+            {
+                'event': 'ping',
+            },
+            contextId
+        );
+    }
+
+    websocketClose (conxid = 'default') {
+        super.websocketClose (conxid);
+        // stop heartbeat ticker
+        let heartbeatTimer = this._contextGet (conxid, 'heartbeattimer');
+        if (typeof heartbeatTimer !== 'undefined') {
+            this._cancelTimer (heartbeatTimer);
+        }
+        this._contextSet (conxid, 'heartbeattimer', undefined);
+    }
+
+    _websocketDispatch (contextId, msg) {
+        // _websocketOnMsg [{"binary":0,"channel":"addChannel","data":{"result":true,"channel":"ok_sub_spot_btc_usdt_depth"}}] default
+        // _websocketOnMsg [{"binary":0,"channel":"ok_sub_spot_btc_usdt_depth","data":{"asks":[[
+        let type = this.safeString (msg, 'type');
+        const parts = type.split ('.');
+        if(parts[0] == 'depth') {
+            this._websocketHandleOb (contextId, msg, parts[2]);
+        } else if(parts[0] == 'ticker') {
+            this._websocketHandleTicker (contextId, msg, parts[1]);
+        } else if(parts[0] == 'trade') {
+            this._websocketHandleTrade (contextId, msg, parts[1]);
+        }
+    }
+
+    _websocketHandleTrade (contextId, data, symbol) {
+        this.emit ('trade', symbol, data );
+    }
+
+    _websocketHandleTicker (contextId, data, symbol) {
+        const ticker = data.ticker;
+        const tick = {
+            type: data.type,
+            ts: data.ts,
+            seq: data.seq,
+            ticker: {
+                LastPrice: ticker[0],
+                LastVolume: ticker[1],
+                MaxBuyPrice: ticker[2],
+                MaxBuyVolume: ticker[3],
+                MinSalePrice: ticker[4],
+                MinSaleVolume: ticker[5],
+                BeforeH24Price: ticker[6],
+                HighestH24Price: ticker[7],
+                LowestH24Price: ticker[8],
+                OneDayVolume1: ticker[9],
+                OneDayVolume2: ticker[10],
+            }
+        };
+        this.emit ('ticker', symbol, tick );
+    }
+
+    _websocketHandleOb (contextId, data, symbol) {
+        this.emit ('ob', symbol, this._cloneOrderBook ( this.parseOrderBook(data, data.ts) ));
+    }
+
+    parseOrderBook (orderbook, timestamp = undefined, bidsKey = 'bids', asksKey = 'asks', priceKey = 0, amountKey = 1) {
+        const bids = orderbook[bidsKey];
+        const bidsnew = [], asksnew = [];
+        let i = 0;
+        while( i < bids.length ) {
+            bidsnew.push( [bids[i++], bids[i++]] );
+        }
+        i = 0;
+        const asks = orderbook[asksKey];
+        while( i < asks.length) {
+            asksnew.push( [asks[i++], asks[i++]] );
+        }
+
+        return {
+            'bids': bidsnew,
+            'asks': asksnew,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'nonce': undefined,
+        }
+    }
+
+    _websocketOnMessage (contextId, data) {
+        let msgs = JSON.parse (data);
+        if (Array.isArray (msgs)) {
+            for (let i = 0; i < msgs.length; i++) {
+                this._websocketDispatch (contextId, msgs[i]);
+            }
+        } else {
+            this._websocketDispatch (contextId, msgs);
+        }
+    }
+
+    _websocketSubscribe (contextId, event, symbol, nonce, params = {}) {
+        if (event !== 'ob' && event !== 'trade' && event !== 'ticker') {
+            throw new NotSupported ('subscribe ' + event + '(' + symbol + ') not supported for exchange ' + this.id);
+        }
+        if (event === 'ob') {
+            let data = this._contextGetSymbolData (contextId, event, symbol);
+            data['depth'] = params['depth'];
+            data['limit'] = params['limit'];
+            this._contextSetSymbolData (contextId, event, symbol, data);
+            const sendJson = {
+                'cmd': 'sub',
+                'args': [this._getOrderBookChannelBySymbol (symbol, params)],
+            };
+            this.websocketSendJson (sendJson);
+        } else if (event === 'ticker') {
+            const sendJson = {
+                'cmd': 'sub',
+                'args': [`ticker.${symbol}`],
+            };
+            this.websocketSendJson (sendJson);
+        } else if (event === 'trade') {
+            const sendJson = {
+                'cmd': 'sub',
+                'args': [`trade.${symbol}`],
+            };
+            this.websocketSendJson (sendJson);
+        }
+        let nonceStr = nonce.toString ();
+        this.emit (nonceStr, true);
+    }
+
+    //doesnt exist for FCoin
+    // _websocketUnsubscribe (contextId, event, symbol, nonce, params = {}) {}
+
+    _getOrderBookChannelBySymbol (symbol, params = {}) {
+        const depthParam = this.safeString (params, 'depth', '');
+        return `depth.${depthParam.toUpperCase()}.${symbol.toLowerCase()}`;
     }
 };
