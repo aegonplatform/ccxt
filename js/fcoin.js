@@ -132,6 +132,9 @@ module.exports = class fcoin extends Exchange {
                         'baseurl': 'wss://api.fcoin.com/v2/ws',
                     },
                 },
+                'methodmap': {
+                    '_websocketSendHeartbeat': '_websocketSendHeartbeat',
+                },
                 'events': {
                     'ob': {
                         'conx-tpl': 'default',
@@ -646,30 +649,11 @@ module.exports = class fcoin extends Exchange {
     }
 
     _websocketHandleTrade (contextId, data, symbol) {
-        this.emit ('trade', symbol, data );
+        this.emit ('trade', symbol, this.parseTrade(data) );
     }
 
     _websocketHandleTicker (contextId, data, symbol) {
-        const ticker = data.ticker;
-        const tick = {
-            type: data.type,
-            ts: data.ts,
-            seq: data.seq,
-            ticker: {
-                LastPrice: ticker[0],
-                LastVolume: ticker[1],
-                MaxBuyPrice: ticker[2],
-                MaxBuyVolume: ticker[3],
-                MinSalePrice: ticker[4],
-                MinSaleVolume: ticker[5],
-                BeforeH24Price: ticker[6],
-                HighestH24Price: ticker[7],
-                LowestH24Price: ticker[8],
-                OneDayVolume1: ticker[9],
-                OneDayVolume2: ticker[10],
-            }
-        };
-        this.emit ('ticker', symbol, tick );
+        this.emit ('ticker', symbol, this.parseTicker (data) );
     }
 
     _websocketHandleOb (contextId, data, symbol) {
