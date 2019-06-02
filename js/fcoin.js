@@ -697,6 +697,7 @@ module.exports = class fcoin extends Exchange {
         if (event !== 'ob' && event !== 'trade' && event !== 'ticker') {
             throw new NotSupported ('subscribe ' + event + '(' + symbol + ') not supported for exchange ' + this.id);
         }
+        symbol = symbol.toLowerCase();
         if (event === 'ob') {
             let data = this._contextGetSymbolData (contextId, event, symbol);
             data['depth'] = params['depth'];
