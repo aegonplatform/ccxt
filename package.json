@@ -40,8 +40,7 @@
     "pandoc-doc-manual": "pandoc --wrap=preserve --columns=10000 --from=markdown --to=rst --output=doc/manual.rst wiki/Manual.md",
     "pandoc-doc-install": "pandoc --wrap=preserve --columns=10000 --from=markdown --to=rst --output=doc/install.rst wiki/Install.md",
     "pandoc-doc-exchanges": "pandoc --wrap=preserve --columns=10000 --from=markdown --to=rst --output=doc/exchanges.rst wiki/Exchange-Markets.md",
-    "pandoc-doc-exchanges-by-country": "pandoc --wrap=preserve --columns=10000 --from=markdown --to=rst --output=doc/exchanges-by-country.rst wiki/Exchange-Markets-By-Country.md",
-    "postinstall": "opencollective postinstall && node postinstall.js"
+    "pandoc-doc-exchanges-by-country": "pandoc --wrap=preserve --columns=10000 --from=markdown --to=rst --output=doc/exchanges-by-country.rst wiki/Exchange-Markets-By-Country.md"
   },
   "types": "./ccxt.d.ts",
   "dependencies": {
