@@ -697,7 +697,6 @@ module.exports = class fcoin extends Exchange {
         if (event !== 'ob' && event !== 'trade' && event !== 'ticker') {
             throw new NotSupported ('subscribe ' + event + '(' + symbol + ') not supported for exchange ' + this.id);
         }
-        symbol = symbol.toLowerCase();
         if (event === 'ob') {
             let data = this._contextGetSymbolData (contextId, event, symbol);
             data['depth'] = params['depth'];
@@ -711,13 +710,13 @@ module.exports = class fcoin extends Exchange {
         } else if (event === 'ticker') {
             const sendJson = {
                 'cmd': 'sub',
-                'args': [`ticker.${symbol}`],
+                'args': [`ticker.${symbol.toLowerCase()}`],
             };
             this.websocketSendJson (sendJson);
         } else if (event === 'trade') {
             const sendJson = {
                 'cmd': 'sub',
-                'args': [`trade.${symbol}`],
+                'args': [`trade.${symbol.toLowerCase()}`],
             };
             this.websocketSendJson (sendJson);
         }
