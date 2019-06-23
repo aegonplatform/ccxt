@@ -699,7 +699,7 @@ module.exports = class fcoin extends Exchange {
         }
         if (event === 'ob') {
             let data = this._contextGetSymbolData (contextId, event, symbol);
-            data['depth'] = params['depth'];
+            data['depth'] = `L.${params['depth']}`;
             data['limit'] = params['limit'];
             this._contextSetSymbolData (contextId, event, symbol, data);
             const sendJson = {
