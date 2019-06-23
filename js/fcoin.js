@@ -699,7 +699,7 @@ module.exports = class fcoin extends Exchange {
         }
         if (event === 'ob') {
             let data = this._contextGetSymbolData (contextId, event, symbol);
-            data['depth'] = `L.${params['depth']}`;
+            data['depth'] = params['depth'];
             data['limit'] = params['limit'];
             this._contextSetSymbolData (contextId, event, symbol, data);
             const sendJson = {
@@ -728,7 +728,7 @@ module.exports = class fcoin extends Exchange {
     // _websocketUnsubscribe (contextId, event, symbol, nonce, params = {}) {}
 
     _getOrderBookChannelBySymbol (symbol, params = {}) {
-        const depthParam = this.safeString (params, 'depth', '');
-        return `depth.${depthParam.toUpperCase()}.${symbol.toLowerCase()}`;
+        const limitParam = this.safeString (params, 'limit', '');
+        return `depth.L${limitParam.toUpperCase()}.${symbol.toLowerCase()}`;
     }
 };
