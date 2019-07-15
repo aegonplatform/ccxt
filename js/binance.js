@@ -1429,7 +1429,7 @@ module.exports = class binance extends Exchange {
             data['ob'] = response;
             data['deltas'] = [];
             if (typeof config !== 'undefined') {
-                this.emit ('ob', symbol, this._cloneOrderBook (response, config['ob'][symbol]['limit']));
+                this.emit ('ob', symbol, this._cloneOrderBook (response, (config['ob'][symbol] || {})['limit']));
             } else {
                 this.emit ('ob', symbol, this._cloneOrderBook (response));
             }
