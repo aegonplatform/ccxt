@@ -1192,6 +1192,21 @@ module.exports = class Exchange extends EventEmitter{
         return this.filterBySymbolSinceLimit (result, symbol, since, limit)
     }
 
+    safeCurrencyCode (currencyId, currency = undefined) {
+        let code = undefined
+        if (currencyId !== undefined) {
+            if (this.currencies_by_id !== undefined && currencyId in this.currencies_by_id) {
+                code = this.currencies_by_id[currencyId]['code']
+            } else {
+                code = this.commonCurrencyCode (currencyId.toUpperCase ())
+            }
+        }
+        if (code === undefined && currency !== undefined) {
+            code = currency['code']
+        }
+        return code
+    }
+
     filterBySymbol (array, symbol = undefined) {
         return ((symbol !== undefined) ? array.filter (entry => entry.symbol === symbol) : array)
     }
