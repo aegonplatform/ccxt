@@ -2067,42 +2067,38 @@ module.exports = class okex3 extends Exchange {
 
     async withdraw (code, amount, address, tag = undefined, params = {}) {
         this.checkAddress (address);
+
         await this.loadMarkets ();
+
         const currency = this.currency (code);
-        if (tag) {
-            address = address + ':' + tag;
-        }
         const fee = this.safeString (params, 'fee');
-        if (fee === undefined) {
-            throw new ExchangeError (this.id + " withdraw() requires a `fee` string parameter, network transaction fee must be ≥ 0. Withdrawals to OKCoin or OKEx are fee-free, please set '0'. Withdrawing to external digital asset address requires network transaction fee.");
+
+        if (!fee) {
+            throw new ExchangeError (`
+                ${this.id} withdraw() requires a 'fee' string parameter, network transaction fee must be ≥ 0. 
+                Withdrawals to OKCoin or OKEx are fee-free, please set '0'. Withdrawing to external digital 
+                asset address requires network transaction fee.`
+            );
         }
+
         const request = {
             'currency': currency['id'],
-            'to_address': address,
-            'destination': '4', // 2 = OKCoin International, 3 = OKEx 4 = others
+            'to_address': [address, tag].join(':'),
+            'destination': '4',
             'amount': this.numberToString (amount),
-            'fee': fee, // String. Network transaction fee ≥ 0. Withdrawals to OKCoin or OKEx are fee-free, please set as 0. Withdrawal to external digital asset address requires network transaction fee.
+            'trade_pwd': this.trade_pwd || params['trade_pwd'],
+            'fee': fee
         };
-        if (this.password) {
-            request['trade_pwd'] = this.password;
-        } else if ('password' in params) {
-            request['trade_pwd'] = params['password'];
-        } else if ('trade_pwd' in params) {
-            request['trade_pwd'] = params['trade_pwd'];
-        }
-        const query = this.omit (params, [ 'fee', 'password', 'trade_pwd' ]);
+        
         if (!('trade_pwd' in request)) {
-            throw new ExchangeError (this.id + ' withdraw() requires this.password set on the exchange instance or a password / trade_pwd parameter');
+            throw new ExchangeError (`
+                ${this.id} withdraw() requires this.password set on the exchange instance or a 
+                password / trade_pwd parameter.
+            `);
         }
-        const response = await this.accountPostWithdrawal (this.extend (request, query));
-        //
-        //     {
-        //         "amount":"0.1",
-        //         "withdrawal_id":"67485",
-        //         "currency":"btc",
-        //         "result":true
-        //     }
-        //
+
+        const response = await this.accountPostWithdrawal (request);
+
         return {
             'info': response,
             'id': this.safeString (response, 'withdraw_id'),
