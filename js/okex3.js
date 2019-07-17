@@ -2083,7 +2083,7 @@ module.exports = class okex3 extends Exchange {
 
         const request = {
             'currency': currency['id'],
-            'to_address': [address, tag].join(':'),
+            'to_address': [address, tag].filter(v => !!v).join(':'),
             'destination': '4',
             'amount': this.numberToString (amount),
             'trade_pwd': this.trade_pwd || params['trade_pwd'],
