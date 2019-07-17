@@ -21,6 +21,7 @@ module.exports = class okex3 extends Exchange {
                 'fetchOHLCV': true,
                 'fetchOrder': true,
                 'fetchOrders': false,
+                'fetchFundingFees': true,
                 'fetchOpenOrders': true,
                 'fetchClosedOrders': true,
                 'fetchCurrencies': false, // see below
@@ -2729,6 +2730,22 @@ module.exports = class okex3 extends Exchange {
             }
             throw new ExchangeError (feedback); // unknown message
         }
+    }
+
+    async fetchFundingFees (codes = undefined, params = {}) {
+        let response = await this.accountGetWithdrawalFee ();
+
+        if(!response || !response.length) return {};
+        let withdrawFees = {};
+        for (let i = 0; i < response.length; i++) {
+            let fee = response[i];
+            withdrawFees[fee.currency] = fee.min_fee;
+        }
+        return {
+            'withdraw': withdrawFees,
+            'deposit': {},
+            'info': response,
+        };
     }
 
     _isFutureSymbol (symbol) {
