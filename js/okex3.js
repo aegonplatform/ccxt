@@ -2731,6 +2731,22 @@ module.exports = class okex3 extends Exchange {
         }
     }
 
+    async fetchFundingFees (codes = undefined, params = {}) {
+        let response = await this.accountGetWithdrawalFee ();
+
+        if(!response || !response.length) return {};
+        let withdrawFees = {};
+        for (let i = 0; i < response.length; i++) {
+            let fee = response[i];
+            withdrawFees[fee.currency] = fee.min_fee;
+        }
+        return {
+            'withdraw': withdrawFees,
+            'deposit': {},
+            'info': response,
+        };
+    }
+
     _isFutureSymbol (symbol) {
         const market = this.markets[symbol];
         if (!market) {
