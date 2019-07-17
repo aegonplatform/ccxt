@@ -2074,7 +2074,11 @@ module.exports = class okex3 extends Exchange {
         const fee = this.safeString (params, 'fee');
 
         if (!fee) {
-            throw new ExchangeError (this.id + " withdraw() requires a `fee` string parameter, network transaction fee must be ≥ 0. Withdrawals to OKCoin or OKEx are fee-free, please set '0'. Withdrawing to external digital asset address requires network transaction fee.");
+            throw new ExchangeError (`
+                ${this.id} withdraw() requires a 'fee' string parameter, network transaction fee must be ≥ 0. 
+                Withdrawals to OKCoin or OKEx are fee-free, please set '0'. Withdrawing to external digital 
+                asset address requires network transaction fee.`
+            );
         }
 
         const request = {
@@ -2087,7 +2091,10 @@ module.exports = class okex3 extends Exchange {
         };
         
         if (!('trade_pwd' in request)) {
-            throw new ExchangeError (this.id + ' withdraw() requires this.password set on the exchange instance or a password / trade_pwd parameter');
+            throw new ExchangeError (`
+                ${this.id} withdraw() requires this.password set on the exchange instance or a 
+                password / trade_pwd parameter.
+            `);
         }
 
         const response = await this.accountPostWithdrawal (request);
