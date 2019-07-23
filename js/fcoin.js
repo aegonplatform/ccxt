@@ -251,12 +251,13 @@ module.exports = class fcoin extends Exchange {
         await this.loadMarkets ();
         if (limit !== undefined) {
             if ((limit === 20) || (limit === 100)) {
+                if(limit === 100) limit = 150; //L100 is no longer valid
                 limit = 'L' + limit.toString ();
             } else {
                 throw new ExchangeError (this.id + ' fetchOrderBook supports limit of 20, 100 or no limit. Other values are not accepted');
             }
         } else {
-            limit = 'full';
+            limit = 'L20';
         }
         let request = this.extend ({
             'symbol': this.marketId (symbol),
