@@ -1303,11 +1303,6 @@ module.exports = class kraken extends Exchange {
     }
 
     _contextGetSymbolData(conxid, event, symbol) {
-        // const translate = {"XXBTZ":"XXBT", "XXBT":"BTC", "XBT":"BTC", "BTC":"BTC"};
-        // const split = symbol.split("/");
-        // const s0 = translate[split[0]] || split[0];
-        // const s1 = translate[split[1]] || split[1];
-        // const translated = `${s0}/${s1}`
         return this.websocketContexts[conxid]['events'][event][ symbol ]['data'];
     }
 
