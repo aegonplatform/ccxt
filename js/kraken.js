@@ -1259,7 +1259,7 @@ module.exports = class kraken extends Exchange {
                 this.emit ('err', new ExchangeError (this.id + ' msg received from unregistered channels:' + chanId), contextId);
                 return;
             }
-            let symbol = channels[chanKey]['symbol'];
+            let symbol = this._translateSymbol(channels[chanKey]['symbol']);
             let event = channels[chanKey]['event'];
             if (event === 'ob') {
                 this._websocketHandleOrderBook (contextId, symbol, data);
@@ -1267,7 +1267,7 @@ module.exports = class kraken extends Exchange {
         } else if (event === 'subscriptionStatus') {
             // event
             let id = this.safeString (msg, 'pair');
-            let symbol = this.findSymbol (id);
+            let symbol = this._translateSymbol(this.findSymbol (id));
             if (symbol === undefined) {
                 symbol = id;
             }
@@ -1294,11 +1294,16 @@ module.exports = class kraken extends Exchange {
         }
     }
 
-    _contextGetSymbolData(conxid, event, symbol) {
+    _translateSymbol(symbol) {
         const translate = {"XXBTZ":"XXBT", "XXBT":"BTC", "XBT":"BTC", "BTC":"BTC"};
         const split = symbol.split("/");
-        const translated = `${translate[split[0]]}/${split[1]}`
-        return this.websocketContexts[conxid]['events'][event][ translated ]['data'];
+        const s0 = translate[split[0]] || split[0];
+        const s1 = translate[split[1]] || split[1];
+        return `${s0}/${s1}`;
+    }
+
+    _contextGetSymbolData(conxid, event, symbol) {
+        return this.websocketContexts[conxid]['events'][event][ symbol ]['data'];
     }
 
     _websocketHandleSubscription (contextId, event, symbol, msg) {
