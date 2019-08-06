@@ -1398,8 +1398,43 @@ module.exports = class hitbtc2 extends hitbtc {
                 // TODO:update orderbook
                 // console.log('update orderbook>>>', orderbook);
                 this._websocketHandleUpdateOrderbook (contextId, msg);
+            } else if (method === 'activeOrders') {
+                // console.log('activeorders',msg)
+                this._websocketHandleActiveOrders (contextId, msg);
+            } else if (method === 'report') {
+                this._websocketHandleReport (contextId, msg);
             }
         }
+    }
+
+    _websocketHandleActiveOrders (contextId, data) {
+        const oddata = this.safeValue (data, 'params');
+        let od = this._contextGetSymbolData (contextId, 'od', 'all');
+        if (od['od'] === undefined && oddata.length > 0) {
+            od['od'] = {};
+        }
+        for (let j = 0; j < oddata.length; j++) {
+            let order = this.parseOrder (oddata[j]);
+            let orderid = order['id'];
+            od['od'][orderid] = order;
+        }
+        od['rawData'] = oddata;
+        this._contextSetSymbolData (contextId, 'od', 'all', od);
+        this.emit ('od', this._cloneOrders (od['od']));
+    }
+
+    _websocketHandleReport (contextId, data) {
+        const oddata = this.safeValue (data, 'params');
+        let od = this._contextGetSymbolData (contextId, 'od', 'all');
+        // status, new, canceled, expired, suspended, trade, replaced
+        let order = this.parseOrder (oddata);
+        let orderid = order['id'];
+        od['od'][orderid] = order;
+        if (oddata['reportType'] === 'replaced') {
+            delete od['od'][oddata['originalRequestClientOrderId']];
+        }
+        this._contextSetSymbolData (contextId, 'od', 'all', od);
+        this.emit ('od', this._cloneOrders (od['od']));
     }
 
     _websocketHandleSnapshotOrderbook (contextId, data) {
@@ -1420,33 +1455,33 @@ module.exports = class hitbtc2 extends hitbtc {
 
     _websocketIsZeroSize (size) {
         // hitbtc - their doc is really bad, how many 0 will it have?
-        return size === '0' || size === '0.0' || size === '0.00' || size === '0.000' || size === '0.0000';
+        return size === '0' || size === '0.0' || size === '0.00' || size === '0.000' || size === '0.0000' || size === '0.00000';
     }
 
     _websocketUpdateOrder (items, updates) {
-        let newitems = [];
-        for (let i = 0; i < items.length; i++) {
-            const item = items[i];
-            let removeItem = false;
-            for (let j = 0; j < updates.length; j++) {
-                const o = updates[j];
+        for (let j = 0; j < updates.length; j++) {
+            const o = updates[j];
+            let removeItem = -1;
+            let addItem = true;
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i];
                 if (o['price'] === item['price']) {
                     if (this._websocketIsZeroSize (o['size'])) {
-                        // remove size === 0
-                        removeItem = true;
-                        // console.log ('htbtc2 remove order',item,o);
+                        removeItem = i;
                     } else {
-                        // update price
-                        // console.log ('htbtc2 update order',item,o);
                         item['size'] = o['size'];
                     }
+                    addItem = false;
                 }
             }
-            if (!removeItem) {
-                newitems.push (item);
+            if (removeItem > -1) {
+                items.splice (removeItem, 1);
+            }
+            if (addItem) {
+                items.push (o);
             }
         }
-        return newitems;
+        return items;
     }
 
     _websocketHandleUpdateOrderbook (contextId, data) {
@@ -1478,26 +1513,47 @@ module.exports = class hitbtc2 extends hitbtc {
     }
 
     _websocketSubscribe (contextId, event, symbol, nonce, params = {}) {
-        if (event !== 'ob') {
+        if (event !== 'ob' && event !== 'od') {
             throw new NotSupported ('subscribe ' + event + '(' + symbol + ') not supported for exchange ' + this.id);
         }
-        let data = this._contextGetSymbolData (contextId, event, symbol);
-        // depth from 0 to 5
-        // see https://github.com/huobiapi/API_Docs/wiki/WS_api_reference#%E8%AE%A2%E9%98%85-market-depth-%E6%95%B0%E6%8D%AE-marketsymboldepthtype
-        data['depth'] = this.safeInteger (params, 'depth', '50');
-        data['limit'] = this.safeInteger (params, 'limit', 200);
-        // it is not limit
-        // data['limit'] = params['depth'];
-        this._contextSetSymbolData (contextId, event, symbol, data);
-        const rawsymbol = this.marketId (symbol);
-        const sendJson = {
-            'method': 'subscribeOrderbook',
-            'params': {
-                'symbol': rawsymbol,
-            },
-            'id': rawsymbol,
-        };
-        this.websocketSendJson (sendJson);
+        if (event === 'ob') {
+            let data = this._contextGetSymbolData (contextId, event, symbol);
+            // depth from 0 to 5
+            // see https://github.com/huobiapi/API_Docs/wiki/WS_api_reference#%E8%AE%A2%E9%98%85-market-depth-%E6%95%B0%E6%8D%AE-marketsymboldepthtype
+            data['depth'] = this.safeInteger (params, 'depth', '50');
+            data['limit'] = this.safeInteger (params, 'limit', 200);
+            // it is not limit
+            // data['limit'] = params['depth'];
+            this._contextSetSymbolData (contextId, event, symbol, data);
+            const rawsymbol = this.marketId (symbol);
+            const sendJson = {
+                'method': 'subscribeOrderbook',
+                'params': {
+                    'symbol': rawsymbol,
+                },
+                'id': rawsymbol,
+            };
+            this.websocketSendJson (sendJson);
+        }
+        if (event === 'od') { // Connect using ApiKey/Secret to get order report
+            let data = this._contextGetSymbolData (contextId, event, 'all');
+            data['od'] = undefined;
+            this._contextSetSymbolData (contextId, event, 'all', data);
+            const sendLoginJson = {
+                'method': 'login',
+                'params': {
+                    'algo': 'BASIC',
+                    'pKey': this.apiKey,
+                    'sKey': this.secret,
+                },
+            };
+            this.websocketSendJson (sendLoginJson);
+            const sendJson = {
+                'method': 'subscribeReports',
+                'params': {},
+            };
+            this.websocketSendJson (sendJson);
+        }
         let nonceStr = nonce.toString ();
         this.emit (nonceStr, true);
     }
@@ -1524,6 +1580,14 @@ module.exports = class hitbtc2 extends hitbtc {
         let data = this._contextGetSymbolData (contextId, 'ob', symbol);
         if ('ob' in data && typeof data['ob'] !== 'undefined') {
             return this._cloneOrderBook (data['ob'], limit);
+        }
+        return undefined;
+    }
+
+    _getCurrentOrders (contextId, orderid) {
+        let data = this._contextGetSymbolData (contextId, 'od', 'all');
+        if ('od' in data && typeof data['od'] !== 'undefined') {
+            return this._cloneOrders (data['od'], orderid);
         }
         return undefined;
     }
