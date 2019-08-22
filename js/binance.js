@@ -1406,6 +1406,7 @@ module.exports = class binance extends Exchange {
         if (!error) {
             let lastUpdateId = this.safeInteger (response, 'nonce');
             let deltas = data['deltas'];
+            if(!deltas) return;
             let index = 0;
             for (index = 0; index < deltas.length; index++) {
                 let delta = deltas[index];
