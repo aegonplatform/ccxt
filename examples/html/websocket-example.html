@@ -1,0 +1,42 @@
+<html>
+    <body>
+        Websocket data printed in browser console...
+        <script src="../../dist/ccxt.browser.js"></script>
+        <script>
+            const symbol = 'ETH/BTC';
+            const event = 'ticker';
+            const params = {};
+            const proxy = 'https://cors-anywhere.herokuapp.com/';
+            const exchange = new ccxt['kucoin']({
+            enableRateLimit: true,
+            verbose: true,
+            timeout: 20000,
+            proxy: proxy,
+            // agent: agent
+          });
+          exchange.on('err', (err, conxid) => {
+            try {
+              console.log(err);
+              exchange.websocketClose(conxid);
+            } catch (ex) {
+              console.log(ex);
+            }
+          });
+          exchange.on(event, (market, data) => {
+            console.log(event, ' received: ', market, data);
+          });
+          exchange.loadMarkets().
+            then ((response) => {
+                exchange.websocketSubscribe(event, symbol, params).
+                    then(response => {
+                        console.log("subscribed");
+                    }).catch(ex => {
+                        console.log(ex);
+                    });
+            }).catch((ex) => {
+                console.log(ex);
+            });
+        
+        </script>
+    </body>
+</html>

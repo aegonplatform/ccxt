@@ -16,17 +16,21 @@ module.exports = class gdax extends Exchange {
             'rateLimit': 1000,
             'userAgent': this.userAgents['chrome'],
             'has': {
+                'cancelAllOrders': true,
                 'CORS': true,
-                'fetchOHLCV': true,
                 'deposit': true,
-                'withdraw': true,
-                'fetchOrder': true,
-                'fetchOrders': true,
-                'fetchOpenOrders': true,
+                'fetchAccounts': true,
                 'fetchClosedOrders': true,
                 'fetchDepositAddress': true,
+                'createDepositAddress': true,
                 'fetchMyTrades': true,
+                'fetchOHLCV': true,
+                'fetchOpenOrders': true,
+                'fetchOrder': true,
+                'fetchOrderTrades': true,
+                'fetchOrders': true,
                 'fetchTransactions': true,
+                'withdraw': true,
             },
             'timeframes': {
                 '1m': 60,
@@ -73,10 +77,12 @@ module.exports = class gdax extends Exchange {
                         'accounts/{id}/ledger',
                         'accounts/{id}/transfers',
                         'coinbase-accounts',
+                        'coinbase-accounts/{id}/addresses',
                         'fills',
                         'funding',
                         'orders',
                         'orders/{id}',
+                        'otc/orders',
                         'payment-methods',
                         'position',
                         'reports/{id}',
@@ -106,8 +112,8 @@ module.exports = class gdax extends Exchange {
                 'trading': {
                     'tierBased': true, // complicated tier system per coin
                     'percentage': true,
-                    'maker': 0.0,
-                    'taker': 0.3 / 100, // tiered fee starts at 0.3%
+                    'maker': 0.15 / 100, // highest fee of all tiers
+                    'taker': 0.25 / 100, // highest fee of all tiers
                 },
                 'funding': {
                     'tierBased': false,
@@ -137,6 +143,7 @@ module.exports = class gdax extends Exchange {
                     'Invalid API Key': AuthenticationError,
                     'invalid signature': AuthenticationError,
                     'Invalid Passphrase': AuthenticationError,
+                    'Invalid order id': InvalidOrder,
                 },
                 'broad': {
                     'Order already done': OrderNotFound,
@@ -149,34 +156,34 @@ module.exports = class gdax extends Exchange {
     }
 
     async fetchMarkets (params = {}) {
-        let markets = await this.publicGetProducts ();
-        let result = [];
-        for (let p = 0; p < markets.length; p++) {
-            let market = markets[p];
-            let id = market['id'];
-            let base = market['base_currency'];
-            let quote = market['quote_currency'];
-            let symbol = base + '/' + quote;
-            let priceLimits = {
+        const response = await this.publicGetProducts (params);
+        const result = [];
+        for (let i = 0; i < response.length; i++) {
+            const market = response[i];
+            const id = this.safeString (market, 'id');
+            const baseId = this.safeString (market, 'base_currency');
+            const quoteId = this.safeString (market, 'quote_currency');
+            const base = this.safeCurrencyCode (baseId);
+            const quote = this.safeCurrencyCode (quoteId);
+            const symbol = base + '/' + quote;
+            const priceLimits = {
                 'min': this.safeFloat (market, 'quote_increment'),
                 'max': undefined,
             };
-            let precision = {
-                'amount': 8,
+            const precision = {
+                'amount': this.precisionFromString (this.safeString (market, 'base_increment')),
                 'price': this.precisionFromString (this.safeString (market, 'quote_increment')),
             };
             let taker = this.fees['trading']['taker'];  // does not seem right
             if ((base === 'ETH') || (base === 'LTC')) {
                 taker = 0.003;
             }
-            let accessible = true;
-            if ('accessible' in market) {
-                accessible = this.safeValue (market, 'accessible');
-            }
-            const active = (market['status'] === 'online') && accessible;
+            const active = market['status'] === 'online';
             result.push (this.extend (this.fees['trading'], {
                 'id': id,
                 'symbol': symbol,
+                'baseId': baseId,
+                'quoteId': quoteId,
                 'base': base,
                 'quote': quote,
                 'precision': precision,
@@ -199,47 +206,83 @@ module.exports = class gdax extends Exchange {
         return result;
     }
 
+    async fetchAccounts (params = {}) {
+        const response = await this.privateGetAccounts (params);
+        //
+        //     [
+        //         {
+        //             id: '4aac9c60-cbda-4396-9da4-4aa71e95fba0',
+        //             currency: 'BTC',
+        //             balance: '0.0000000000000000',
+        //             available: '0',
+        //             hold: '0.0000000000000000',
+        //             profile_id: 'b709263e-f42a-4c7d-949a-a95c83d065da'
+        //         },
+        //         {
+        //             id: 'f75fa69a-1ad1-4a80-bd61-ee7faa6135a3',
+        //             currency: 'USDC',
+        //             balance: '0.0000000000000000',
+        //             available: '0',
+        //             hold: '0.0000000000000000',
+        //             profile_id: 'b709263e-f42a-4c7d-949a-a95c83d065da'
+        //         },
+        //     ]
+        //
+        const result = [];
+        for (let i = 0; i < response.length; i++) {
+            const account = response[i];
+            const accountId = this.safeString (account, 'id');
+            const currencyId = this.safeString (account, 'currency');
+            const code = this.safeCurrencyCode (currencyId);
+            result.push ({
+                'id': accountId,
+                'type': undefined,
+                'currency': code,
+                'info': account,
+            });
+        }
+        return result;
+    }
+
     async fetchBalance (params = {}) {
         await this.loadMarkets ();
-        let balances = await this.privateGetAccounts ();
-        let result = { 'info': balances };
-        for (let b = 0; b < balances.length; b++) {
-            let balance = balances[b];
-            let currency = balance['currency'];
-            let account = {
+        const response = await this.privateGetAccounts (params);
+        const result = { 'info': response };
+        for (let i = 0; i < response.length; i++) {
+            const balance = response[i];
+            const currencyId = this.safeString (balance, 'currency');
+            const code = this.safeCurrencyCode (currencyId);
+            const account = {
                 'free': this.safeFloat (balance, 'available'),
                 'used': this.safeFloat (balance, 'hold'),
                 'total': this.safeFloat (balance, 'balance'),
             };
-            result[currency] = account;
+            result[code] = account;
         }
         return this.parseBalance (result);
     }
 
     async fetchOrderBook (symbol, limit = undefined, params = {}) {
         await this.loadMarkets ();
-        let orderbook = await this.publicGetProductsIdBook (this.extend ({
+        const request = {
             'id': this.marketId (symbol),
             'level': 2, // 1 best bidask, 2 aggregated, 3 full
-        }, params));
-        return this.parseOrderBook (orderbook);
+        };
+        const response = await this.publicGetProductsIdBook (this.extend (request, params));
+        return this.parseOrderBook (response);
     }
 
     async fetchTicker (symbol, params = {}) {
         await this.loadMarkets ();
-        let market = this.market (symbol);
-        let request = this.extend ({
+        const market = this.market (symbol);
+        const request = {
             'id': market['id'],
-        }, params);
-        let ticker = await this.publicGetProductsIdTicker (request);
-        let timestamp = this.parse8601 (ticker['time']);
-        let bid = undefined;
-        let ask = undefined;
-        if ('bid' in ticker)
-            bid = this.safeFloat (ticker, 'bid');
-        if ('ask' in ticker)
-            ask = this.safeFloat (ticker, 'ask');
-        let last = this.safeFloat (ticker, 'price');
+        };
+        const ticker = await this.publicGetProductsIdTicker (this.extend (request, params));
+        const timestamp = this.parse8601 (this.safeValue (ticker, 'time'));
+        const bid = this.safeFloat (ticker, 'bid');
+        const ask = this.safeFloat (ticker, 'ask');
+        const last = this.safeFloat (ticker, 'price');
         return {
             'symbol': symbol,
             'timestamp': timestamp,
@@ -265,40 +308,41 @@ module.exports = class gdax extends Exchange {
     }
 
     parseTrade (trade, market = undefined) {
-        let timestamp = this.parse8601 (this.safeString2 (trade, 'time', 'created_at'));
+        const timestamp = this.parse8601 (this.safeString2 (trade, 'time', 'created_at'));
         let symbol = undefined;
         if (market === undefined) {
-            let marketId = this.safeString (trade, 'product_id');
+            const marketId = this.safeString (trade, 'product_id');
             market = this.safeValue (this.markets_by_id, marketId);
         }
-        if (market)
+        if (market) {
             symbol = market['symbol'];
+        }
         let feeRate = undefined;
         let feeCurrency = undefined;
+        let takerOrMaker = undefined;
         if (market !== undefined) {
             feeCurrency = market['quote'];
             if ('liquidity' in trade) {
-                let rateType = (trade['liquidity'] === 'T') ? 'taker' : 'maker';
-                feeRate = market[rateType];
+                takerOrMaker = (trade['liquidity'] === 'T') ? 'taker' : 'maker';
+                feeRate = market[takerOrMaker];
             }
         }
-        let feeCost = this.safeFloat (trade, 'fill_fees');
-        if (feeCost === undefined)
-            feeCost = this.safeFloat (trade, 'fee');
-        let fee = {
+        const feeCost = this.safeFloat2 (trade, 'fill_fees', 'fee');
+        const fee = {
             'cost': feeCost,
             'currency': feeCurrency,
             'rate': feeRate,
         };
-        let type = undefined;
-        let id = this.safeString (trade, 'trade_id');
+        const type = undefined;
+        const id = this.safeString (trade, 'trade_id');
         let side = (trade['side'] === 'buy') ? 'sell' : 'buy';
-        let orderId = this.safeString (trade, 'order_id');
+        const orderId = this.safeString (trade, 'order_id');
         // GDAX returns inverted side to fetchMyTrades vs fetchTrades
-        if (orderId !== undefined)
+        if (orderId !== undefined) {
             side = (trade['side'] === 'buy') ? 'buy' : 'sell';
-        let price = this.safeFloat (trade, 'price');
-        let amount = this.safeFloat (trade, 'size');
+        }
+        const price = this.safeFloat (trade, 'price');
+        const amount = this.safeFloat (trade, 'size');
         return {
             'id': id,
             'order': orderId,
@@ -307,6 +351,7 @@ module.exports = class gdax extends Exchange {
             'datetime': this.iso8601 (timestamp),
             'symbol': symbol,
             'type': type,
+            'takerOrMaker': takerOrMaker,
             'side': side,
             'price': price,
             'amount': amount,
@@ -321,22 +366,24 @@ module.exports = class gdax extends Exchange {
             throw new ArgumentsRequired (this.id + ' fetchMyTrades requires a symbol argument');
         }
         await this.loadMarkets ();
-        let market = this.market (symbol);
-        let request = {
+        const market = this.market (symbol);
+        const request = {
             'product_id': market['id'],
         };
-        if (limit !== undefined)
+        if (limit !== undefined) {
             request['limit'] = limit;
-        let response = await this.privateGetFills (this.extend (request, params));
+        }
+        const response = await this.privateGetFills (this.extend (request, params));
         return this.parseTrades (response, market, since, limit);
     }
 
     async fetchTrades (symbol, since = undefined, limit = undefined, params = {}) {
         await this.loadMarkets ();
-        let market = this.market (symbol);
-        let response = await this.publicGetProductsIdTrades (this.extend ({
+        const market = this.market (symbol);
+        const request = {
             'id': market['id'], // fixes issue #2
-        }, params));
+        };
+        const response = await this.publicGetProductsIdTrades (this.extend (request, params));
         return this.parseTrades (response, market, since, limit);
     }
 
@@ -353,9 +400,9 @@ module.exports = class gdax extends Exchange {
 
     async fetchOHLCV (symbol, timeframe = '1m', since = undefined, limit = undefined, params = {}) {
         await this.loadMarkets ();
-        let market = this.market (symbol);
-        let granularity = this.timeframes[timeframe];
-        let request = {
+        const market = this.market (symbol);
+        const granularity = this.timeframes[timeframe];
+        const request = {
             'id': market['id'],
             'granularity': granularity,
         };
@@ -367,17 +414,17 @@ module.exports = class gdax extends Exchange {
             }
             request['end'] = this.ymdhms (this.sum (limit * granularity * 1000, since));
         }
-        let response = await this.publicGetProductsIdCandles (this.extend (request, params));
+        const response = await this.publicGetProductsIdCandles (this.extend (request, params));
         return this.parseOHLCVs (response, market, timeframe, since, limit);
     }
 
-    async fetchTime () {
-        let response = await this.publicGetTime ();
-        return this.parse8601 (response['iso']);
+    async fetchTime (params = {}) {
+        const response = await this.publicGetTime (params);
+        return this.parse8601 (response, 'iso');
     }
 
     parseOrderStatus (status) {
-        let statuses = {
+        const statuses = {
             'pending': 'open',
             'active': 'open',
             'open': 'open',
@@ -389,42 +436,57 @@ module.exports = class gdax extends Exchange {
     }
 
     parseOrder (order, market = undefined) {
-        let timestamp = this.parse8601 (order['created_at']);
+        const timestamp = this.parse8601 (order['created_at']);
         let symbol = undefined;
         if (market === undefined) {
-            if (order['product_id'] in this.markets_by_id)
-                market = this.markets_by_id[order['product_id']];
+            const marketId = this.safeString (order, 'product_id');
+            if (marketId in this.markets_by_id) {
+                market = this.markets_by_id[marketId];
+            }
         }
-        let status = this.parseOrderStatus (this.safeString (order, 'status'));
-        let price = this.safeFloat (order, 'price');
-        let amount = this.safeFloat (order, 'size');
-        if (amount === undefined)
-            amount = this.safeFloat (order, 'funds');
-        if (amount === undefined)
+        const status = this.parseOrderStatus (this.safeString (order, 'status'));
+        const price = this.safeFloat (order, 'price');
+        let amount = this.safeFloat2 (order, 'size', 'funds');
+        if (amount === undefined) {
             amount = this.safeFloat (order, 'specified_funds');
-        let filled = this.safeFloat (order, 'filled_size');
+        }
+        const filled = this.safeFloat (order, 'filled_size');
         let remaining = undefined;
-        if (amount !== undefined)
-            if (filled !== undefined)
+        if (amount !== undefined) {
+            if (filled !== undefined) {
                 remaining = amount - filled;
-        let cost = this.safeFloat (order, 'executed_value');
-        let fee = {
-            'cost': this.safeFloat (order, 'fill_fees'),
-            'currency': undefined,
-            'rate': undefined,
-        };
-        if (market)
+            }
+        }
+        const cost = this.safeFloat (order, 'executed_value');
+        const feeCost = this.safeFloat (order, 'fill_fees');
+        let fee = undefined;
+        if (feeCost !== undefined) {
+            let feeCurrencyCode = undefined;
+            if (market !== undefined) {
+                feeCurrencyCode = market['quote'];
+            }
+            fee = {
+                'cost': feeCost,
+                'currency': feeCurrencyCode,
+                'rate': undefined,
+            };
+        }
+        if (market !== undefined) {
             symbol = market['symbol'];
+        }
+        const id = this.safeString (order, 'id');
+        const type = this.safeString (order, 'type');
+        const side = this.safeString (order, 'side');
         return {
-            'id': order['id'],
+            'id': id,
             'info': order,
             'timestamp': timestamp,
             'datetime': this.iso8601 (timestamp),
             'lastTradeTimestamp': undefined,
             'status': status,
             'symbol': symbol,
-            'type': order['type'],
-            'side': order['side'],
+            'type': type,
+            'side': side,
             'price': price,
             'cost': cost,
             'amount': amount,
@@ -436,15 +498,29 @@ module.exports = class gdax extends Exchange {
 
     async fetchOrder (id, symbol = undefined, params = {}) {
         await this.loadMarkets ();
-        let response = await this.privateGetOrdersId (this.extend ({
+        const request = {
             'id': id,
-        }, params));
+        };
+        const response = await this.privateGetOrdersId (this.extend (request, params));
         return this.parseOrder (response);
+    }
+
+    async fetchOrderTrades (id, symbol = undefined, since = undefined, limit = undefined, params = {}) {
+        await this.loadMarkets ();
+        let market = undefined;
+        if (symbol !== undefined) {
+            market = this.market (symbol);
+        }
+        const request = {
+            'order_id': id,
+        };
+        const response = await this.privateGetFills (this.extend (request, params));
+        return this.parseTrades (response, market, since, limit);
     }
 
     async fetchOrders (symbol = undefined, since = undefined, limit = undefined, params = {}) {
         await this.loadMarkets ();
-        let request = {
+        const request = {
             'status': 'all',
         };
         let market = undefined;
@@ -452,25 +528,25 @@ module.exports = class gdax extends Exchange {
             market = this.market (symbol);
             request['product_id'] = market['id'];
         }
-        let response = await this.privateGetOrders (this.extend (request, params));
+        const response = await this.privateGetOrders (this.extend (request, params));
         return this.parseOrders (response, market, since, limit);
     }
 
     async fetchOpenOrders (symbol = undefined, since = undefined, limit = undefined, params = {}) {
         await this.loadMarkets ();
-        let request = {};
+        const request = {};
         let market = undefined;
         if (symbol !== undefined) {
             market = this.market (symbol);
             request['product_id'] = market['id'];
         }
-        let response = await this.privateGetOrders (this.extend (request, params));
+        const response = await this.privateGetOrders (this.extend (request, params));
         return this.parseOrders (response, market, since, limit);
     }
 
     async fetchClosedOrders (symbol = undefined, since = undefined, limit = undefined, params = {}) {
         await this.loadMarkets ();
-        let request = {
+        const request = {
             'status': 'done',
         };
         let market = undefined;
@@ -478,22 +554,23 @@ module.exports = class gdax extends Exchange {
             market = this.market (symbol);
             request['product_id'] = market['id'];
         }
-        let response = await this.privateGetOrders (this.extend (request, params));
+        const response = await this.privateGetOrders (this.extend (request, params));
         return this.parseOrders (response, market, since, limit);
     }
 
     async createOrder (symbol, type, side, amount, price = undefined, params = {}) {
         await this.loadMarkets ();
         // let oid = this.nonce ().toString ();
-        let order = {
+        const request = {
             'product_id': this.marketId (symbol),
             'side': side,
-            'size': amount,
+            'size': this.amountToPrecision (symbol, amount),
             'type': type,
         };
-        if (type === 'limit')
-            order['price'] = price;
-        let response = await this.privatePostOrders (this.extend (order, params));
+        if (type === 'limit') {
+            request['price'] = this.priceToPrecision (symbol, price);
+        }
+        const response = await this.privatePostOrders (this.extend (request, params));
         return this.parseOrder (response);
     }
 
@@ -502,11 +579,15 @@ module.exports = class gdax extends Exchange {
         return await this.privateDeleteOrdersId ({ 'id': id });
     }
 
+    async cancelAllOrders (symbol = undefined, params = {}) {
+        return await this.privateDeleteOrders (params);
+    }
+
     calculateFee (symbol, type, side, amount, price, takerOrMaker = 'taker', params = {}) {
-        let market = this.markets[symbol];
-        let rate = market[takerOrMaker];
-        let cost = amount * price;
-        let currency = market['quote'];
+        const market = this.markets[symbol];
+        const rate = market[takerOrMaker];
+        const cost = amount * price;
+        const currency = market['quote'];
         return {
             'type': takerOrMaker,
             'currency': currency,
@@ -515,15 +596,14 @@ module.exports = class gdax extends Exchange {
         };
     }
 
-    async getPaymentMethods () {
-        let response = await this.privateGetPaymentMethods ();
-        return response;
+    async fetchPaymentMethods (params = {}) {
+        return await this.privateGetPaymentMethods (params);
     }
 
     async deposit (code, amount, address, params = {}) {
         await this.loadMarkets ();
-        let currency = this.currency (code);
-        let request = {
+        const currency = this.currency (code);
+        const request = {
             'currency': currency['id'],
             'amount': amount,
         };
@@ -540,9 +620,10 @@ module.exports = class gdax extends Exchange {
             // https://docs.gdax.com/#deposits
             throw new NotSupported (this.id + ' deposit() requires one of `coinbase_account_id` or `payment_method_id` extra params');
         }
-        let response = await this[method] (this.extend (request, params));
-        if (!response)
+        const response = await this[method] (this.extend (request, params));
+        if (!response) {
             throw new ExchangeError (this.id + ' deposit() error: ' + this.json (response));
+        }
         return {
             'info': response,
             'id': response['id'],
@@ -551,9 +632,9 @@ module.exports = class gdax extends Exchange {
 
     async withdraw (code, amount, address, tag = undefined, params = {}) {
         this.checkAddress (address);
-        let currency = this.currency (code);
         await this.loadMarkets ();
-        let request = {
+        const currency = this.currency (code);
+        const request = {
             'currency': currency['id'],
             'amount': amount,
         };
@@ -566,9 +647,10 @@ module.exports = class gdax extends Exchange {
             method += 'Crypto';
             request['crypto_address'] = address;
         }
-        let response = await this[method] (this.extend (request, params));
-        if (!response)
+        const response = await this[method] (this.extend (request, params));
+        if (!response) {
             throw new ExchangeError (this.id + ' withdraw() error: ' + this.json (response));
+        }
         return {
             'info': response,
             'id': response['id'],
@@ -577,47 +659,47 @@ module.exports = class gdax extends Exchange {
 
     async fetchTransactions (code = undefined, since = undefined, limit = undefined, params = {}) {
         await this.loadMarkets ();
-        if (code === undefined) {
-            throw new ArgumentsRequired (this.id + ' fetchTransactions() requires a currency code argument');
-        }
-        let currency = this.currency (code);
-        let accountId = undefined;
-        let accounts = await this.privateGetAccounts ();
-        for (let i = 0; i < accounts.length; i++) {
-            let account = accounts[i];
-            // todo: use unified common currencies below
-            if (account['currency'] === currency['id']) {
-                accountId = account['id'];
-                break;
+        await this.loadAccounts ();
+        let currency = undefined;
+        let id = this.safeString (params, 'id'); // account id
+        if (id === undefined) {
+            if (code === undefined) {
+                throw new ArgumentsRequired (this.id + ' fetchTransactions() requires a currency code argument if no account id specified in params');
             }
+            currency = this.currency (code);
+            const accountsByCurrencyCode = this.indexBy (this.accounts, 'currency');
+            const account = this.safeValue (accountsByCurrencyCode, code);
+            if (account === undefined) {
+                throw new ExchangeError (this.id + ' fetchTransactions() could not find account id for ' + code);
+            }
+            id = account['id'];
         }
-        if (accountId === undefined) {
-            throw new ExchangeError (this.id + ' fetchTransactions() could not find account id for ' + code);
-        }
-        let request = {
-            'id': accountId,
+        const request = {
+            'id': id,
         };
         if (limit !== undefined) {
             request['limit'] = limit;
         }
-        let response = await this.privateGetAccountsIdTransfers (this.extend (request, params));
+        const response = await this.privateGetAccountsIdTransfers (this.extend (request, params));
         for (let i = 0; i < response.length; i++) {
             response[i]['currency'] = code;
         }
-        return this.parseTransactions (response);
+        return this.parseTransactions (response, currency, since, limit);
     }
 
     parseTransactionStatus (transaction) {
-        if ('canceled_at' in transaction && transaction['canceled_at']) {
+        const canceled = this.safeValue (transaction, 'canceled_at');
+        if (canceled) {
             return 'canceled';
-        } else if ('completed_at' in transaction && transaction['completed_at']) {
+        }
+        const processed = this.safeValue (transaction, 'processed_at');
+        const completed = this.safeValue (transaction, 'completed_at');
+        if (completed) {
             return 'ok';
-        } else if ((('canceled_at' in transaction) && !transaction['canceled_at']) && (('completed_at' in transaction) && !transaction['completed_at']) && (('processed_at' in transaction) && !transaction['processed_at'])) {
-            return 'pending';
-        } else if ('processed_at' in transaction && transaction['processed_at']) {
-            return 'pending';
-        } else {
+        } else if (processed && !completed) {
             return 'failed';
+        } else {
+            return 'pending';
         }
     }
 
@@ -627,19 +709,14 @@ module.exports = class gdax extends Exchange {
         const txid = this.safeString (details, 'crypto_transaction_hash');
         const timestamp = this.parse8601 (this.safeString (transaction, 'created_at'));
         const updated = this.parse8601 (this.safeString (transaction, 'processed_at'));
-        let code = undefined;
         const currencyId = this.safeString (transaction, 'currency');
-        if (currencyId in this.currencies_by_id) {
-            currency = this.currencies_by_id[currencyId];
-            code = currency['code'];
-        } else {
-            code = this.commonCurrencyCode (currencyId);
-        }
-        let fee = undefined;
+        const code = this.safeCurrencyCode (currencyId, currency);
+        const fee = undefined;
         const status = this.parseTransactionStatus (transaction);
         const amount = this.safeFloat (transaction, 'amount');
         let type = this.safeString (transaction, 'type');
         let address = this.safeString (details, 'crypto_address');
+        const tag = this.safeString (details, 'destination_tag');
         address = this.safeString (transaction, 'crypto_address', address);
         if (type === 'withdraw') {
             type = 'withdrawal';
@@ -652,7 +729,7 @@ module.exports = class gdax extends Exchange {
             'timestamp': timestamp,
             'datetime': this.iso8601 (timestamp),
             'address': address,
-            'tag': undefined,
+            'tag': tag,
             'type': type,
             'amount': amount,
             'currency': code,
@@ -664,15 +741,16 @@ module.exports = class gdax extends Exchange {
 
     sign (path, api = 'public', method = 'GET', params = {}, headers = undefined, body = undefined) {
         let request = '/' + this.implodeParams (path, params);
-        let query = this.omit (params, this.extractParams (path));
+        const query = this.omit (params, this.extractParams (path));
         if (method === 'GET') {
-            if (Object.keys (query).length)
+            if (Object.keys (query).length) {
                 request += '?' + this.urlencode (query);
+            }
         }
-        let url = this.urls['api'] + request;
+        const url = this.urls['api'] + request;
         if (api === 'private') {
             this.checkRequiredCredentials ();
-            let nonce = this.nonce ().toString ();
+            const nonce = this.nonce ().toString ();
             let payload = '';
             if (method !== 'GET') {
                 if (Object.keys (query).length) {
@@ -681,9 +759,9 @@ module.exports = class gdax extends Exchange {
                 }
             }
             // let payload = (body) ? body : '';
-            let what = nonce + method + request + payload;
-            let secret = this.base64ToBinary (this.secret);
-            let signature = this.hmac (this.encode (what), secret, 'sha256', 'base64');
+            const what = nonce + method + request + payload;
+            const secret = this.base64ToBinary (this.secret);
+            const signature = this.hmac (this.encode (what), secret, 'sha256', 'base64');
             headers = {
                 'CB-ACCESS-KEY': this.apiKey,
                 'CB-ACCESS-SIGN': this.decode (signature),
@@ -697,26 +775,25 @@ module.exports = class gdax extends Exchange {
 
     async fetchDepositAddress (code, params = {}) {
         await this.loadMarkets ();
-        let currency = this.currency (code);
+        const currency = this.currency (code);
         let accounts = this.safeValue (this.options, 'coinbaseAccounts');
         if (accounts === undefined) {
             accounts = await this.privateGetCoinbaseAccounts ();
             this.options['coinbaseAccounts'] = accounts; // cache it
             this.options['coinbaseAccountsByCurrencyId'] = this.indexBy (accounts, 'currency');
         }
-        let currencyId = currency['id'];
-        let account = this.safeValue (this.options['coinbaseAccountsByCurrencyId'], currencyId);
+        const currencyId = currency['id'];
+        const account = this.safeValue (this.options['coinbaseAccountsByCurrencyId'], currencyId);
         if (account === undefined) {
             // eslint-disable-next-line quotes
             throw new InvalidAddress (this.id + " fetchDepositAddress() could not find currency code " + code + " with id = " + currencyId + " in this.options['coinbaseAccountsByCurrencyId']");
         }
-        let response = await this.privatePostCoinbaseAccountsIdAddresses (this.extend ({
+        const request = {
             'id': account['id'],
-        }, params));
-        let address = this.safeString (response, 'address');
-        // todo: figure this out
-        // let tag = this.safeString (response, 'addressTag');
-        let tag = undefined;
+        };
+        const response = await this.privateGetCoinbaseAccountsIdAddresses (this.extend (request, params));
+        const address = this.safeString (response, 'address');
+        const tag = this.safeString (response, 'destination_tag');
         return {
             'currency': code,
             'address': this.checkAddress (address),
@@ -725,11 +802,40 @@ module.exports = class gdax extends Exchange {
         };
     }
 
-    handleErrors (code, reason, url, method, headers, body, response) {
+    async createDepositAddress (code, params = {}) {
+        await this.loadMarkets ();
+        const currency = this.currency (code);
+        let accounts = this.safeValue (this.options, 'coinbaseAccounts');
+        if (accounts === undefined) {
+            accounts = await this.privateGetCoinbaseAccounts ();
+            this.options['coinbaseAccounts'] = accounts; // cache it
+            this.options['coinbaseAccountsByCurrencyId'] = this.indexBy (accounts, 'currency');
+        }
+        const currencyId = currency['id'];
+        const account = this.safeValue (this.options['coinbaseAccountsByCurrencyId'], currencyId);
+        if (account === undefined) {
+            // eslint-disable-next-line quotes
+            throw new InvalidAddress (this.id + " fetchDepositAddress() could not find currency code " + code + " with id = " + currencyId + " in this.options['coinbaseAccountsByCurrencyId']");
+        }
+        const request = {
+            'id': account['id'],
+        };
+        const response = await this.privatePostCoinbaseAccountsIdAddresses (this.extend (request, params));
+        const address = this.safeString (response, 'address');
+        const tag = this.safeString (response, 'destination_tag');
+        return {
+            'currency': code,
+            'address': this.checkAddress (address),
+            'tag': tag,
+            'info': response,
+        };
+    }
+
+    handleErrors (code, reason, url, method, headers, body, response, requestHeaders, requestBody) {
         if ((code === 400) || (code === 404)) {
             if (body[0] === '{') {
-                let message = response['message'];
-                let feedback = this.id + ' ' + message;
+                const message = response['message'];
+                const feedback = this.id + ' ' + message;
                 const exact = this.exceptions['exact'];
                 if (message in exact) {
                     throw new exact[message] (feedback);
@@ -746,7 +852,7 @@ module.exports = class gdax extends Exchange {
     }
 
     async request (path, api = 'public', method = 'GET', params = {}, headers = undefined, body = undefined) {
-        let response = await this.fetch2 (path, api, method, params, headers, body);
+        const response = await this.fetch2 (path, api, method, params, headers, body);
         if ('message' in response) {
             throw new ExchangeError (this.id + ' ' + this.json (response));
         }
@@ -754,20 +860,20 @@ module.exports = class gdax extends Exchange {
     }
 
     _websocketOnMessage (contextId, data) {
-        let msg = JSON.parse (data);
-        let msgType = this.safeString (msg, 'type');
+        const msg = JSON.parse (data);
+        const msgType = this.safeString (msg, 'type');
         // console.log(msg);
         if (msgType === 'subscriptions') {
-            let channels = this.safeValue (msg, 'channels');
+            const channels = this.safeValue (msg, 'channels');
             let level2Found = false;
             for (let i = 0; i < channels.length; i++) {
-                let channel = channels[i];
-                let channelName = channel['name'];
+                const channel = channels[i];
+                const channelName = channel['name'];
                 if (channelName === 'level2') {
-                    let productIds = channel['product_ids'];
+                    const productIds = channel['product_ids'];
                     level2Found = true;
                     for (let j = 0; j < productIds.length; j++) {
-                        let productId = productIds[j];
+                        const productId = productIds[j];
                         this._websocketHandleSubscription (contextId, 'ob', productId);
                     }
                     this._websocketHandleUnsubscription (contextId, 'ob', productIds);
@@ -784,27 +890,27 @@ module.exports = class gdax extends Exchange {
     }
 
     _websocketHandleObSnapshot (contextId, msg) {
-        let id = this.safeString (msg, 'product_id');
-        let symbol = this.findSymbol (id);
-        let symbolData = this._contextGetSymbolData (contextId, 'ob', symbol);
-        let ob = this.parseOrderBook (msg);
+        const id = this.safeString (msg, 'product_id');
+        const symbol = this._websocketFindSymbol (id);
+        const symbolData = this._contextGetSymbolData (contextId, 'ob', symbol);
+        const ob = this.parseOrderBook (msg);
         symbolData['ob'] = ob;
         this.emit ('ob', symbol, this._cloneOrderBook (ob, symbolData['limit']));
         this._contextSetSymbolData (contextId, 'ob', symbol, symbolData);
     }
 
     _websocketHandleObUpdate (contextId, msg) {
-        let id = this.safeString (msg, 'product_id');
-        let symbol = this.findSymbol (id);
-        let symbolData = this._contextGetSymbolData (contextId, 'ob', symbol);
-        let ob = symbolData['ob'];
-        let changes = this.safeValue (msg, 'changes', []);
+        const id = this.safeString (msg, 'product_id');
+        const symbol = this._websocketFindSymbol (id);
+        const symbolData = this._contextGetSymbolData (contextId, 'ob', symbol);
+        const ob = symbolData['ob'];
+        const changes = this.safeValue (msg, 'changes', []);
         for (let i = 0; i < changes.length; i++) {
-            let change = changes[i];
-            let op = change[0];
-            let price = parseFloat (change[1]);
-            let amount = parseFloat (change[2]);
-            let side = (op === 'sell') ? 'asks' : 'bids';
+            const change = changes[i];
+            const op = change[0];
+            const price = parseFloat (change[1]);
+            const amount = parseFloat (change[2]);
+            const side = (op === 'sell') ? 'asks' : 'bids';
             this.updateBidAsk ([price, amount], ob[side], op === 'buy');
         }
         symbolData['ob'] = ob;
@@ -813,13 +919,13 @@ module.exports = class gdax extends Exchange {
     }
 
     _websocketHandleSubscription (contextId, event, msg) {
-        let symbol = this.findSymbol (msg);
-        let symbolData = this._contextGetSymbolData (contextId, event, symbol);
+        const symbol = this._websocketFindSymbol (msg);
+        const symbolData = this._contextGetSymbolData (contextId, event, symbol);
         if ('sub-nonces' in symbolData) {
-            let nonces = symbolData['sub-nonces'];
+            const nonces = symbolData['sub-nonces'];
             const keys = Object.keys (nonces);
             for (let i = 0; i < keys.length; i++) {
-                let nonce = keys[i];
+                const nonce = keys[i];
                 this._cancelTimeout (nonces[nonce]);
                 this.emit (nonce, true);
             }
@@ -832,16 +938,16 @@ module.exports = class gdax extends Exchange {
         let symbols = this._contextGetSymbols (contextId, event);
         symbols = Object.keys (symbols);
         for (let i = 0; i < symbols.length; i++) {
-            let symbol = symbols[i];
+            const symbol = symbols[i];
             // if symbol not in subscribed symbols
-            let id = this.marketId (symbol);
+            const id = this.marketId (symbol);
             if (!this.inArray (id, idsSubscribed)) {
-                let symbolData = this._contextGetSymbolData (contextId, event, symbol);
+                const symbolData = this._contextGetSymbolData (contextId, event, symbol);
                 if ('unsub-nonces' in symbolData) {
-                    let nonces = symbolData['unsub-nonces'];
+                    const nonces = symbolData['unsub-nonces'];
                     const keys = Object.keys (nonces);
                     for (let i = 0; i < keys.length; i++) {
-                        let nonce = keys[i];
+                        const nonce = keys[i];
                         this._cancelTimeout (nonces[nonce]);
                         this.emit (nonce, true);
                     }
@@ -857,13 +963,13 @@ module.exports = class gdax extends Exchange {
             throw new NotSupported ('subscribe ' + event + '(' + symbol + ') not supported for exchange ' + this.id);
         }
         // save nonce for subscription response
-        let symbolData = this._contextGetSymbolData (contextId, event, symbol);
+        const symbolData = this._contextGetSymbolData (contextId, event, symbol);
         if (!('sub-nonces' in symbolData)) {
             symbolData['sub-nonces'] = {};
         }
         symbolData['limit'] = this.safeInteger (params, 'limit', undefined);
-        let nonceStr = nonce.toString ();
-        let handle = this._setTimeout (contextId, this.timeout, this._websocketMethodMap ('_websocketTimeoutRemoveNonce'), [contextId, nonceStr, event, symbol, 'sub-nonce']);
+        const nonceStr = nonce.toString ();
+        const handle = this._setTimeout (contextId, this.timeout, this._websocketMethodMap ('_websocketTimeoutRemoveNonce'), [contextId, nonceStr, event, symbol, 'sub-nonce']);
         symbolData['sub-nonces'][nonceStr] = handle;
         this._contextSetSymbolData (contextId, event, symbol, symbolData);
         // send request
@@ -879,27 +985,27 @@ module.exports = class gdax extends Exchange {
         if (event !== 'ob') {
             throw new NotSupported ('unsubscribe ' + event + '(' + symbol + ') not supported for exchange ' + this.id);
         }
-        let id = this.market_id (symbol);
-        let payload = {
+        const id = this.market_id (symbol);
+        const payload = {
             'type': 'unsubscribe',
             'product_ids': [id],
             'channels': ['level2'],
         };
-        let symbolData = this._contextGetSymbolData (contextId, event, symbol);
+        const symbolData = this._contextGetSymbolData (contextId, event, symbol);
         if (!('unsub-nonces' in symbolData)) {
             symbolData['unsub-nonces'] = {};
         }
-        let nonceStr = nonce.toString ();
-        let handle = this._setTimeout (contextId, this.timeout, this._websocketMethodMap ('_websocketTimeoutRemoveNonce'), [contextId, nonceStr, event, symbol, 'unsub-nonces']);
+        const nonceStr = nonce.toString ();
+        const handle = this._setTimeout (contextId, this.timeout, this._websocketMethodMap ('_websocketTimeoutRemoveNonce'), [contextId, nonceStr, event, symbol, 'unsub-nonces']);
         symbolData['unsub-nonces'][nonceStr] = handle;
         this._contextSetSymbolData (contextId, event, symbol, symbolData);
         this.websocketSendJson (payload);
     }
 
     _websocketTimeoutRemoveNonce (contextId, timerNonce, event, symbol, key) {
-        let symbolData = this._contextGetSymbolData (contextId, event, symbol);
+        const symbolData = this._contextGetSymbolData (contextId, event, symbol);
         if (key in symbolData) {
-            let nonces = symbolData[key];
+            const nonces = symbolData[key];
             if (timerNonce in nonces) {
                 this.omit (symbolData[key], timerNonce);
                 this._contextSetSymbolData (contextId, event, symbol, symbolData);
@@ -908,7 +1014,7 @@ module.exports = class gdax extends Exchange {
     }
 
     _getCurrentWebsocketOrderbook (contextId, symbol, limit) {
-        let data = this._contextGetSymbolData (contextId, 'ob', symbol);
+        const data = this._contextGetSymbolData (contextId, 'ob', symbol);
         if (('ob' in data) && (typeof data['ob'] !== 'undefined')) {
             return this._cloneOrderBook (data['ob'], limit);
         }

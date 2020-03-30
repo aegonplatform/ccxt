@@ -1,7 +1,8 @@
 "use strict";
 
 const WebsocketBaseConnection = require ('./websocket_base_connection');
-const WebSocket = require('ws');
+//const WebSocket = require('ws');
+const WebSocket = require('isomorphic-ws');
 
 const { sleep } = require ('../functions')
 
@@ -71,31 +72,36 @@ module.exports = class SocketIoLightConnection extends WebsocketBaseConnection {
             } else {
                 client.ws = new WebSocket(this.options.url);
             }
-
-            client.ws.on('open', async () => {
-                if (this.options['wait-after-connect']) {
-                    await sleep(this.options['wait-after-connect']);
+            const that = this;
+            client.ws.onopen = async function (){
+            //client.ws.on('open', async () => {
+                if (that.options['wait-after-connect']) {
+                    await sleep(that.options['wait-after-connect']);
                 }
                 
-            });
-
-            client.ws.on('error', (error) => {
+            //});
+            };
+            client.ws.onerror = function (error) {
+            //client.ws.on('error', (error) => {
                 if (!client.isClosing) {
-                    this.emit('err', error);
+                    that.emit('err', error);
                 }
                 reject(error);
-            });
-        
-            client.ws.on('close', () => {
+            //});
+            };
+            client.ws.onclose = function (){
+            //client.ws.on('close', () => {
                 if (!client.isClosing) {
-                    this.emit('close');
+                    that.emit('close');
                 }
-                this.close();
+                that.close();
                 reject('closing');
-            });
-        
-            client.ws.on('message', async (data) => {
-                if (this.options['verbose']){
+            //});
+            };
+            client.ws.onmessage = function (dat) {
+                const data = dat.data;
+            //client.ws.on('message', async (data) => {
+                if (that.options['verbose']){
                     console.log("SocketioLightConnection: "+ data);
                 }
 
@@ -103,31 +109,32 @@ module.exports = class SocketIoLightConnection extends WebsocketBaseConnection {
                     if (data[0] === '0') {
                         // initial message
                         const msg = JSON.parse(data.slice(1));
-                        this.client.pingIntervalMs = msg.pingInterval;
-                        this.client.pingTimeoutMs = msg.pingTimeout;
+                        that.client.pingIntervalMs = msg.pingInterval;
+                        that.client.pingTimeoutMs = msg.pingTimeout;
                         
                     } else if (data[0] == '3') {
-                        this.cancelPingTimeout();
-                        if (this.options['verbose']){
+                        that.cancelPingTimeout();
+                        if (that.options['verbose']){
                             console.log("SocketioLightConnection: pong received");
                         }
                     } else if (data[0] == '4') {
                         if (data[1] == '2') {
-                            this.emit('message', data.slice(2));
+                            that.emit('message', data.slice(2));
                         } else if (data[1] == '0'){
-                            this.createPingProcess();
-                            this.emit ('open');
+                            that.createPingProcess();
+                            that.emit ('open');
                             resolve();
                         }
                     } else if (data[0] == '1'){
                         // disconnect
-                        this.emit ('err', 'server sent disconnect message');
-                        this.close();
+                        that.emit ('err', 'server sent disconnect message');
+                        that.close();
                     } else {
                         console.log("unknown msg received from iosocket: ", data);
                     }
                 }
-            });
+            //});
+            };
             this.client = client;
         });
     }

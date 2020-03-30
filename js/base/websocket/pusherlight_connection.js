@@ -1,7 +1,8 @@
 "use strict";
 
 const WebsocketBaseConnection = require ('./websocket_base_connection');
-const WebSocket = require('ws');
+//const WebSocket = require('ws');
+const WebSocket = require('isomorphic-ws');
 
 const { sleep } = require ('../functions')
 
@@ -69,44 +70,49 @@ module.exports = class PusherLightConnection extends WebsocketBaseConnection {
             } else {
                 client.ws = new WebSocket(this.options.url + this.urlParam);
             }
-
-            client.ws.on('open', async () => {
-                
-            });
-
-            client.ws.on('error', (error) => {
+            const that = this;
+            client.ws.onopen = async function (){
+            //client.ws.on('open', async () => {
+                that.emit ('open');
+            //});
+            };
+            client.ws.onerror = function (error) {
+            //client.ws.on('error', (error) => {
                 if (!client.isClosing) {
-                    this.emit('err', error);
+                    that.emit('err', error);
                 }
                 reject(error);
-            });
-        
-            client.ws.on('close', () => {
+            //});
+            };
+            client.ws.onclose = function (){
+            //client.ws.on('close', () => {
                 if (!client.isClosing) {
-                    this.emit('close');
+                    that.emit('close');
                 }
                 reject('closing');
-            });
-        
-            client.ws.on('message', async (data) => {
-                if (this.options['verbose']){
+            //});
+            };
+            client.ws.onmessage = async function(dat){
+                const data = dat;
+            //client.ws.on('message', async (data) => {
+                if (that.options['verbose']){
                     console.log("PusherLightConnection: " + data);
                 }
                 if (client.isClosing) {
                     return;
                 }
-                this.resetActivityCheck ();
+                that.resetActivityCheck ();
                 const msg = JSON.parse(data);
                 if (msg.event === 'pusher:connection_established'){
                     // starting
                     const eventData = JSON.parse(msg.data);
                     if (eventData.activity_timeout){
-                        this.client.activityTimeout = eventData.activity_timeout * 1000;
+                        that.client.activityTimeout = eventData.activity_timeout * 1000;
                     }
-                    if (this.options['wait-after-connect']) {
-                        await sleep(this.options['wait-after-connect']);
+                    if (that.options['wait-after-connect']) {
+                        await sleep(that.options['wait-after-connect']);
                     }
-                    this.emit ('open');
+                    that.emit ('open');
                     resolve();
                 } else if (msg.event === 'pusher:ping'){
                     client.ws.send(JSON.stringify({
@@ -115,23 +121,24 @@ module.exports = class PusherLightConnection extends WebsocketBaseConnection {
                     }));
                 } else if (msg.event === 'pusher_internal:subscription_succeeded'){
                     const channel = msg.channel;
-                    this.emit('message', JSON.stringify({
+                    that.emit('message', JSON.stringify({
                         event: 'subscription_succeeded',
                         channel
                     }));
                 } else if (msg.event === 'pusher:error'){
                     // {"event":"pusher:error","data":{"code":null,"message":"Unsupported event received on socket: subscribe"}
-                    this.emit ('err', msg.data.message);
+                    that.emit ('err', msg.data.message);
                 } else {
                     const eventData = JSON.parse(msg.data);
                     const channel = msg.channel;
-                    this.emit('message', JSON.stringify({
+                    that.emit('message', JSON.stringify({
                         event: msg.event,
                         channel,
                         data: eventData
                     }));
                 }
-            });
+            //});
+            }
             this.client = client;
         });
     }

@@ -36,4 +36,8 @@ module.exports = class WebsocketBaseConnection extends EventEmitter {
     sendJson(data) {
         this.send (JSON.stringify(data));
     }
+
+    sendPing(data) {
+        throw new NotSupported('not implemented method <sendPing>');
+    }
 };

@@ -17,20 +17,21 @@ module.exports = class liquid extends Exchange {
             'rateLimit': 1000,
             'has': {
                 'CORS': false,
+                'fetchCurrencies': true,
                 'fetchTickers': true,
                 'fetchOrder': true,
                 'fetchOrders': true,
                 'fetchOpenOrders': true,
                 'fetchClosedOrders': true,
                 'fetchMyTrades': true,
+                'withdraw': true,
             },
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/45798859-1a872600-bcb4-11e8-8746-69291ce87b04.jpg',
                 'api': 'https://api.liquid.com',
                 'www': 'https://www.liquid.com',
                 'doc': [
-                    'https://developers.quoine.com',
-                    'https://developers.quoine.com/v2',
+                    'https://developers.liquid.com',
                 ],
                 'fees': 'https://help.liquid.com/getting-started-with-liquid/the-platform/fee-structure',
                 'referral': 'https://www.liquid.com?affiliate=SbzC62lt30976',
@@ -44,45 +45,55 @@ module.exports = class liquid extends Exchange {
                         'products/{id}/price_levels',
                         'executions',
                         'ir_ladders/{currency}',
+                        'fees', // add fetchFees, fetchTradingFees, fetchFundingFees
                     ],
                 },
                 'private': {
                     'get': [
                         'accounts/balance',
                         'accounts/main_asset',
-                        'crypto_accounts',
+                        'accounts/{id}',
+                        'accounts/{currency}/reserved_balance_details',
+                        'crypto_accounts', // add fetchAccounts
+                        'crypto_withdrawals', // add fetchWithdrawals
                         'executions/me',
-                        'fiat_accounts',
+                        'fiat_accounts', // add fetchAccounts
+                        'fund_infos', // add fetchDeposits
                         'loan_bids',
                         'loans',
                         'orders',
                         'orders/{id}',
-                        'orders/{id}/trades',
-                        'orders/{id}/executions',
+                        'orders/{id}/trades', // add fetchOrderTrades
                         'trades',
                         'trades/{id}/loans',
                         'trading_accounts',
                         'trading_accounts/{id}',
                         'transactions',
+                        'withdrawals', // add fetchWithdrawals
                     ],
                     'post': [
+                        'crypto_withdrawals',
+                        'fund_infos',
                         'fiat_accounts',
                         'loan_bids',
                         'orders',
+                        'withdrawals',
                     ],
                     'put': [
+                        'crypto_withdrawal/{id}/cancel',
                         'loan_bids/{id}/close',
                         'loans/{id}',
-                        'orders/{id}',
+                        'orders/{id}', // add editOrder
                         'orders/{id}/cancel',
                         'trades/{id}',
+                        'trades/{id}/adjust_margin',
                         'trades/{id}/close',
                         'trades/close_all',
                         'trading_accounts/{id}',
+                        'withdrawals/{id}/cancel',
                     ],
                 },
             },
-            'skipJsonOnStatusCodes': [401],
             'exceptions': {
                 'API rate limit exceeded. Please retry after 300s': DDoSProtection,
                 'API Authentication failed': AuthenticationError,
@@ -96,6 +107,7 @@ module.exports = class liquid extends Exchange {
             },
             'commonCurrencies': {
                 'WIN': 'WCOIN',
+                'HOT': 'HOT Token',
             },
             'options': {
                 'cancelOrderException': true,
@@ -124,7 +136,7 @@ module.exports = class liquid extends Exchange {
     }
 
     async fetchCurrencies (params = {}) {
-        let response = await this.publicGetCurrencies (params);
+        const response = await this.publicGetCurrencies (params);
         //
         //     [
         //         {
@@ -144,15 +156,15 @@ module.exports = class liquid extends Exchange {
         //         },
         //     ]
         //
-        let result = {};
+        const result = {};
         for (let i = 0; i < response.length; i++) {
-            let currency = response[i];
-            let id = this.safeString (currency, 'currency');
-            let code = this.commonCurrencyCode (id);
-            let active = currency['depositable'] && currency['withdrawable'];
-            let amountPrecision = this.safeInteger (currency, 'display_precision');
-            let pricePrecision = this.safeInteger (currency, 'quoting_precision');
-            let precision = Math.max (amountPrecision, pricePrecision);
+            const currency = response[i];
+            const id = this.safeString (currency, 'currency');
+            const code = this.safeCurrencyCode (id);
+            const active = currency['depositable'] && currency['withdrawable'];
+            const amountPrecision = this.safeInteger (currency, 'display_precision');
+            const pricePrecision = this.safeInteger (currency, 'quoting_precision');
+            const precision = Math.max (amountPrecision, pricePrecision);
             result[code] = {
                 'id': id,
                 'code': code,
@@ -185,7 +197,7 @@ module.exports = class liquid extends Exchange {
     }
 
     async fetchMarkets (params = {}) {
-        let markets = await this.publicGetProducts ();
+        const markets = await this.publicGetProducts ();
         //
         //     [
         //         {
@@ -216,34 +228,34 @@ module.exports = class liquid extends Exchange {
         //         },
         //     ]
         //
-        let currencies = await this.fetchCurrencies ();
-        let currenciesByCode = this.indexBy (currencies, 'code');
-        let result = [];
+        const currencies = await this.fetchCurrencies ();
+        const currenciesByCode = this.indexBy (currencies, 'code');
+        const result = [];
         for (let i = 0; i < markets.length; i++) {
-            let market = markets[i];
-            let id = market['id'].toString ();
-            let baseId = market['base_currency'];
-            let quoteId = market['quoted_currency'];
-            let base = this.commonCurrencyCode (baseId);
-            let quote = this.commonCurrencyCode (quoteId);
-            let symbol = base + '/' + quote;
-            let maker = this.safeFloat (market, 'maker_fee');
-            let taker = this.safeFloat (market, 'taker_fee');
-            let active = !market['disabled'];
-            let baseCurrency = this.safeValue (currenciesByCode, base);
-            let quoteCurrency = this.safeValue (currenciesByCode, quote);
-            let precision = {
+            const market = markets[i];
+            const id = market['id'].toString ();
+            const baseId = market['base_currency'];
+            const quoteId = market['quoted_currency'];
+            const base = this.safeCurrencyCode (baseId);
+            const quote = this.safeCurrencyCode (quoteId);
+            const symbol = base + '/' + quote;
+            const maker = this.safeFloat (market, 'maker_fee');
+            const taker = this.safeFloat (market, 'taker_fee');
+            const active = !market['disabled'];
+            const baseCurrency = this.safeValue (currenciesByCode, base);
+            const quoteCurrency = this.safeValue (currenciesByCode, quote);
+            const precision = {
                 'amount': 8,
                 'price': 8,
             };
             let minAmount = undefined;
             if (baseCurrency !== undefined) {
                 minAmount = this.safeFloat (baseCurrency['info'], 'minimum_order_quantity');
-                precision['amount'] = this.safeInteger (baseCurrency['info'], 'quoting_precision');
+                // precision['amount'] = this.safeInteger (baseCurrency['info'], 'quoting_precision');
             }
             let minPrice = undefined;
             if (quoteCurrency !== undefined) {
-                precision['price'] = this.safeInteger (quoteCurrency['info'], 'display_precision');
+                precision['price'] = this.safeInteger (quoteCurrency['info'], 'quoting_precision');
                 minPrice = Math.pow (10, -precision['price']);
             }
             let minCost = undefined;
@@ -252,7 +264,7 @@ module.exports = class liquid extends Exchange {
                     minCost = minPrice * minAmount;
                 }
             }
-            let limits = {
+            const limits = {
                 'amount': {
                     'min': minAmount,
                     'max': undefined,
@@ -286,21 +298,21 @@ module.exports = class liquid extends Exchange {
 
     async fetchBalance (params = {}) {
         await this.loadMarkets ();
-        let balances = await this.privateGetAccountsBalance (params);
-        let result = { 'info': balances };
-        for (let b = 0; b < balances.length; b++) {
-            let balance = balances[b];
-            let currencyId = balance['currency'];
-            let code = currencyId;
-            if (currencyId in this.currencies_by_id) {
-                code = this.currencies_by_id[currencyId]['code'];
-            }
-            let total = parseFloat (balance['balance']);
-            let account = {
-                'free': total,
-                'used': undefined,
-                'total': total,
-            };
+        const response = await this.privateGetAccountsBalance (params);
+        //
+        //     [
+        //         {"currency":"USD","balance":"0.0"},
+        //         {"currency":"BTC","balance":"0.0"},
+        //         {"currency":"ETH","balance":"0.1651354"}
+        //     ]
+        //
+        const result = { 'info': response };
+        for (let i = 0; i < response.length; i++) {
+            const balance = response[i];
+            const currencyId = this.safeString (balance, 'currency');
+            const code = this.safeCurrencyCode (currencyId);
+            const account = this.account ();
+            account['total'] = this.safeFloat (balance, 'balance');
             result[code] = account;
         }
         return this.parseBalance (result);
@@ -308,43 +320,46 @@ module.exports = class liquid extends Exchange {
 
     async fetchOrderBook (symbol, limit = undefined, params = {}) {
         await this.loadMarkets ();
-        let orderbook = await this.publicGetProductsIdPriceLevels (this.extend ({
+        const request = {
             'id': this.marketId (symbol),
-        }, params));
-        return this.parseOrderBook (orderbook, undefined, 'buy_price_levels', 'sell_price_levels');
+        };
+        const response = await this.publicGetProductsIdPriceLevels (this.extend (request, params));
+        return this.parseOrderBook (response, undefined, 'buy_price_levels', 'sell_price_levels');
     }
 
     parseTicker (ticker, market = undefined) {
-        let timestamp = this.milliseconds ();
+        const timestamp = this.milliseconds ();
         let last = undefined;
         if ('last_traded_price' in ticker) {
             if (ticker['last_traded_price']) {
-                let length = ticker['last_traded_price'].length;
-                if (length > 0)
+                const length = ticker['last_traded_price'].length;
+                if (length > 0) {
                     last = this.safeFloat (ticker, 'last_traded_price');
+                }
             }
         }
         let symbol = undefined;
         if (market === undefined) {
-            let marketId = this.safeString (ticker, 'id');
+            const marketId = this.safeString (ticker, 'id');
             if (marketId in this.markets_by_id) {
                 market = this.markets_by_id[marketId];
             } else {
-                let baseId = this.safeString (ticker, 'base_currency');
-                let quoteId = this.safeString (ticker, 'quoted_currency');
+                const baseId = this.safeString (ticker, 'base_currency');
+                const quoteId = this.safeString (ticker, 'quoted_currency');
                 if (symbol in this.markets) {
                     market = this.markets[symbol];
                 } else {
-                    symbol = this.commonCurrencyCode (baseId) + '/' + this.commonCurrencyCode (quoteId);
+                    symbol = this.safeCurrencyCode (baseId) + '/' + this.safeCurrencyCode (quoteId);
                 }
             }
         }
-        if (market !== undefined)
+        if (market !== undefined) {
             symbol = market['symbol'];
+        }
         let change = undefined;
         let percentage = undefined;
         let average = undefined;
-        let open = this.safeFloat (ticker, 'last_price_24h');
+        const open = this.safeFloat (ticker, 'last_price_24h');
         if (open !== undefined && last !== undefined) {
             change = last - open;
             average = this.sum (last, open) / 2;
@@ -378,11 +393,11 @@ module.exports = class liquid extends Exchange {
 
     async fetchTickers (symbols = undefined, params = {}) {
         await this.loadMarkets ();
-        let tickers = await this.publicGetProducts (params);
-        let result = {};
-        for (let t = 0; t < tickers.length; t++) {
-            let ticker = this.parseTicker (tickers[t]);
-            let symbol = ticker['symbol'];
+        const response = await this.publicGetProducts (params);
+        const result = {};
+        for (let i = 0; i < response.length; i++) {
+            const ticker = this.parseTicker (response[i]);
+            const symbol = ticker['symbol'];
             result[symbol] = ticker;
         }
         return result;
@@ -390,11 +405,12 @@ module.exports = class liquid extends Exchange {
 
     async fetchTicker (symbol, params = {}) {
         await this.loadMarkets ();
-        let market = this.market (symbol);
-        let ticker = await this.publicGetProductsId (this.extend ({
+        const market = this.market (symbol);
+        const request = {
             'id': market['id'],
-        }, params));
-        return this.parseTicker (ticker, market);
+        };
+        const response = await this.publicGetProductsId (this.extend (request, params));
+        return this.parseTicker (response, market);
     }
 
     parseTrade (trade, market) {
@@ -404,27 +420,29 @@ module.exports = class liquid extends Exchange {
         //       taker_side: "sell",
         //       created_at:  1512345678,
         //          my_side: "buy"           }
-        let timestamp = trade['created_at'] * 1000;
-        let orderId = this.safeString (trade, 'order_id');
+        const timestamp = this.safeTimestamp (trade, 'created_at');
+        const orderId = this.safeString (trade, 'order_id');
         // 'taker_side' gets filled for both fetchTrades and fetchMyTrades
-        let takerSide = this.safeString (trade, 'taker_side');
+        const takerSide = this.safeString (trade, 'taker_side');
         // 'my_side' gets filled for fetchMyTrades only and may differ from 'taker_side'
-        let mySide = this.safeString (trade, 'my_side');
-        let side = (mySide !== undefined) ? mySide : takerSide;
+        const mySide = this.safeString (trade, 'my_side');
+        const side = (mySide !== undefined) ? mySide : takerSide;
         let takerOrMaker = undefined;
-        if (mySide !== undefined)
+        if (mySide !== undefined) {
             takerOrMaker = (takerSide === mySide) ? 'taker' : 'maker';
+        }
         let cost = undefined;
-        let price = this.safeFloat (trade, 'price');
-        let amount = this.safeFloat (trade, 'quantity');
+        const price = this.safeFloat (trade, 'price');
+        const amount = this.safeFloat (trade, 'quantity');
         if (price !== undefined) {
             if (amount !== undefined) {
                 cost = price * amount;
             }
         }
+        const id = this.safeString (trade, 'id');
         return {
             'info': trade,
-            'id': trade['id'].toString (),
+            'id': id,
             'order': orderId,
             'timestamp': timestamp,
             'datetime': this.iso8601 (timestamp),
@@ -441,59 +459,84 @@ module.exports = class liquid extends Exchange {
 
     async fetchTrades (symbol, since = undefined, limit = undefined, params = {}) {
         await this.loadMarkets ();
-        let market = this.market (symbol);
-        let request = {
+        const market = this.market (symbol);
+        const request = {
             'product_id': market['id'],
         };
-        if (limit !== undefined)
+        if (limit !== undefined) {
             request['limit'] = limit;
+        }
         if (since !== undefined) {
             // timestamp should be in seconds, whereas we use milliseconds in since and everywhere
             request['timestamp'] = parseInt (since / 1000);
         }
-        let response = await this.publicGetExecutions (this.extend (request, params));
-        let result = (since !== undefined) ? response : response['models'];
+        const response = await this.publicGetExecutions (this.extend (request, params));
+        const result = (since !== undefined) ? response : response['models'];
         return this.parseTrades (result, market, since, limit);
     }
 
     async fetchMyTrades (symbol = undefined, since = undefined, limit = undefined, params = {}) {
         await this.loadMarkets ();
-        let market = this.market (symbol);
+        const market = this.market (symbol);
         // the `with_details` param is undocumented - it adds the order_id to the results
-        let request = {
+        const request = {
             'product_id': market['id'],
             'with_details': true,
         };
-        if (limit !== undefined)
+        if (limit !== undefined) {
             request['limit'] = limit;
-        let response = await this.privateGetExecutionsMe (this.extend (request, params));
+        }
+        const response = await this.privateGetExecutionsMe (this.extend (request, params));
         return this.parseTrades (response['models'], market, since, limit);
     }
 
     async createOrder (symbol, type, side, amount, price = undefined, params = {}) {
         await this.loadMarkets ();
-        let order = {
+        const request = {
             'order_type': type,
             'product_id': this.marketId (symbol),
             'side': side,
             'quantity': this.amountToPrecision (symbol, amount),
         };
         if (type === 'limit') {
-            order['price'] = this.priceToPrecision (symbol, price);
+            request['price'] = this.priceToPrecision (symbol, price);
         }
-        let response = await this.privatePostOrders (this.extend (order, params));
+        const response = await this.privatePostOrders (this.extend (request, params));
+        //
+        //     {
+        //         "id": 2157474,
+        //         "order_type": "limit",
+        //         "quantity": "0.01",
+        //         "disc_quantity": "0.0",
+        //         "iceberg_total_quantity": "0.0",
+        //         "side": "sell",
+        //         "filled_quantity": "0.0",
+        //         "price": "500.0",
+        //         "created_at": 1462123639,
+        //         "updated_at": 1462123639,
+        //         "status": "live",
+        //         "leverage_level": 1,
+        //         "source_exchange": "QUOINE",
+        //         "product_id": 1,
+        //         "product_code": "CASH",
+        //         "funding_currency": "USD",
+        //         "currency_pair_code": "BTCUSD",
+        //         "order_fee": "0.0"
+        //     }
+        //
         return this.parseOrder (response);
     }
 
     async cancelOrder (id, symbol = undefined, params = {}) {
         await this.loadMarkets ();
-        let result = await this.privatePutOrdersIdCancel (this.extend ({
+        const request = {
             'id': id,
-        }, params));
-        let order = this.parseOrder (result);
+        };
+        const response = await this.privatePutOrdersIdCancel (this.extend (request, params));
+        const order = this.parseOrder (response);
         if (order['status'] === 'closed') {
             if (this.options['cancelOrderException']) {
-                throw new OrderNotFound (this.id + ' order closed already: ' + this.json (result));
+                throw new OrderNotFound (this.id + ' order closed already: ' + this.json (response));
             }
         }
         return order;
@@ -504,16 +547,15 @@ module.exports = class liquid extends Exchange {
         if (price === undefined) {
             throw new ArgumentsRequired (this.id + ' editOrder requires the price argument');
         }
-        let order = {
+        const request = {
             'order': {
                 'quantity': this.amountToPrecision (symbol, amount),
                 'price': this.priceToPrecision (symbol, price),
             },
-        };
-        let result = await this.privatePutOrdersId (this.extend ({
             'id': id,
-        }, order));
-        return this.parseOrder (result);
+        };
+        const response = await this.privatePutOrdersId (this.extend (request, params));
+        return this.parseOrder (response);
     }
 
     parseOrderStatus (status) {
@@ -526,59 +568,129 @@ module.exports = class liquid extends Exchange {
     }
 
     parseOrder (order, market = undefined) {
-        let orderId = this.safeString (order, 'id');
-        let timestamp = this.safeInteger (order, 'created_at');
-        if (timestamp !== undefined) {
-            timestamp = timestamp * 1000;
-        }
-        let marketId = this.safeString (order, 'product_id');
+        //
+        // createOrder
+        //
+        //     {
+        //         "id": 2157474,
+        //         "order_type": "limit",
+        //         "quantity": "0.01",
+        //         "disc_quantity": "0.0",
+        //         "iceberg_total_quantity": "0.0",
+        //         "side": "sell",
+        //         "filled_quantity": "0.0",
+        //         "price": "500.0",
+        //         "created_at": 1462123639,
+        //         "updated_at": 1462123639,
+        //         "status": "live",
+        //         "leverage_level": 1,
+        //         "source_exchange": "QUOINE",
+        //         "product_id": 1,
+        //         "product_code": "CASH",
+        //         "funding_currency": "USD",
+        //         "currency_pair_code": "BTCUSD",
+        //         "order_fee": "0.0"
+        //     }
+        //
+        // fetchOrder, fetchOrders, fetchOpenOrders, fetchClosedOrders
+        //
+        //     {
+        //         "id": 2157479,
+        //         "order_type": "limit",
+        //         "quantity": "0.01",
+        //         "disc_quantity": "0.0",
+        //         "iceberg_total_quantity": "0.0",
+        //         "side": "sell",
+        //         "filled_quantity": "0.01",
+        //         "price": "500.0",
+        //         "created_at": 1462123639,
+        //         "updated_at": 1462123639,
+        //         "status": "filled",
+        //         "leverage_level": 2,
+        //         "source_exchange": "QUOINE",
+        //         "product_id": 1,
+        //         "product_code": "CASH",
+        //         "funding_currency": "USD",
+        //         "currency_pair_code": "BTCUSD",
+        //         "order_fee": "0.0",
+        //         "executions": [
+        //             {
+        //                 "id": 4566133,
+        //                 "quantity": "0.01",
+        //                 "price": "500.0",
+        //                 "taker_side": "buy",
+        //                 "my_side": "sell",
+        //                 "created_at": 1465396785
+        //             }
+        //         ]
+        //     }
+        //
+        const orderId = this.safeString (order, 'id');
+        const timestamp = this.safeTimestamp (order, 'created_at');
+        const marketId = this.safeString (order, 'product_id');
         market = this.safeValue (this.markets_by_id, marketId);
-        let status = this.parseOrderStatus (this.safeString (order, 'status'));
-        let amount = this.safeFloat (order, 'quantity');
+        const status = this.parseOrderStatus (this.safeString (order, 'status'));
+        const amount = this.safeFloat (order, 'quantity');
         let filled = this.safeFloat (order, 'filled_quantity');
-        let price = this.safeFloat (order, 'price');
+        const price = this.safeFloat (order, 'price');
         let symbol = undefined;
         let feeCurrency = undefined;
         if (market !== undefined) {
             symbol = market['symbol'];
             feeCurrency = market['quote'];
         }
-        let type = order['order_type'];
-        let executedQuantity = 0;
-        let totalValue = 0;
-        let averagePrice = this.safeFloat (order, 'average_price');
-        let trades = undefined;
-        if ('executions' in order) {
-            trades = this.parseTrades (this.safeValue (order, 'executions', []), market);
-            let numTrades = trades.length;
-            for (let i = 0; i < numTrades; i++) {
-                // php copies values upon assignment, but not references them
-                // todo rewrite this (shortly)
-                let trade = trades[i];
-                trade['order'] = orderId;
-                trade['type'] = type;
-                executedQuantity += trade['amount'];
-                totalValue += trade['cost'];
+        const type = this.safeString (order, 'order_type');
+        let tradeCost = 0;
+        let tradeFilled = 0;
+        let average = this.safeFloat (order, 'average_price');
+        const trades = this.parseTrades (this.safeValue (order, 'executions', []), market, undefined, undefined, {
+            'order': orderId,
+            'type': type,
+        });
+        const numTrades = trades.length;
+        for (let i = 0; i < numTrades; i++) {
+            // php copies values upon assignment, but not references them
+            // todo rewrite this (shortly)
+            const trade = trades[i];
+            trade['order'] = orderId;
+            trade['type'] = type;
+            tradeFilled = this.sum (tradeFilled, trade['amount']);
+            tradeCost = this.sum (tradeCost, trade['cost']);
+        }
+        let cost = undefined;
+        let lastTradeTimestamp = undefined;
+        if (numTrades > 0) {
+            lastTradeTimestamp = trades[numTrades - 1]['timestamp'];
+            if (!average && (tradeFilled > 0)) {
+                average = tradeCost / tradeFilled;
             }
-            if (!averagePrice && (numTrades > 0) && (executedQuantity > 0)) {
-                averagePrice = totalValue / executedQuantity;
+            if (cost === undefined) {
+                cost = tradeCost;
+            }
+            if (filled === undefined) {
+                filled = tradeFilled;
             }
         }
-        let cost = filled * averagePrice;
+        let remaining = undefined;
+        if (amount !== undefined && filled !== undefined) {
+            remaining = amount - filled;
+        }
+        const side = this.safeString (order, 'side');
         return {
             'id': orderId,
             'timestamp': timestamp,
             'datetime': this.iso8601 (timestamp),
-            'lastTradeTimestamp': undefined,
+            'lastTradeTimestamp': lastTradeTimestamp,
             'type': type,
             'status': status,
             'symbol': symbol,
-            'side': order['side'],
+            'side': side,
             'price': price,
             'amount': amount,
             'filled': filled,
             'cost': cost,
-            'remaining': amount - filled,
+            'remaining': remaining,
+            'average': average,
             'trades': trades,
             'fee': {
                 'currency': feeCurrency,
@@ -590,44 +702,169 @@ module.exports = class liquid extends Exchange {
 
     async fetchOrder (id, symbol = undefined, params = {}) {
         await this.loadMarkets ();
-        let order = await this.privateGetOrdersId (this.extend ({
+        const request = {
             'id': id,
-        }, params));
-        return this.parseOrder (order);
+        };
+        const response = await this.privateGetOrdersId (this.extend (request, params));
+        return this.parseOrder (response);
     }
 
     async fetchOrders (symbol = undefined, since = undefined, limit = undefined, params = {}) {
         await this.loadMarkets ();
         let market = undefined;
-        let request = {};
+        const request = {
+            // 'funding_currency': market['quoteId'], // filter orders based on "funding" currency (quote currency)
+            // 'product_id': market['id'],
+            // 'status': 'live', // 'filled', 'cancelled'
+            // 'trading_type': 'spot', // 'margin', 'cfd'
+            'with_details': 1, // return full order details including executions
+        };
         if (symbol !== undefined) {
             market = this.market (symbol);
             request['product_id'] = market['id'];
         }
-        let status = this.safeValue (params, 'status');
-        if (status) {
-            params = this.omit (params, 'status');
-            if (status === 'open') {
-                request['status'] = 'live';
-            } else if (status === 'closed') {
-                request['status'] = 'filled';
-            } else if (status === 'canceled') {
-                request['status'] = 'cancelled';
-            }
-        }
-        if (limit !== undefined)
+        if (limit !== undefined) {
             request['limit'] = limit;
-        let result = await this.privateGetOrders (this.extend (request, params));
-        let orders = result['models'];
+        }
+        const response = await this.privateGetOrders (this.extend (request, params));
+        //
+        //     {
+        //         "models": [
+        //             {
+        //                 "id": 2157474,
+        //                 "order_type": "limit",
+        //                 "quantity": "0.01",
+        //                 "disc_quantity": "0.0",
+        //                 "iceberg_total_quantity": "0.0",
+        //                 "side": "sell",
+        //                 "filled_quantity": "0.0",
+        //                 "price": "500.0",
+        //                 "created_at": 1462123639,
+        //                 "updated_at": 1462123639,
+        //                 "status": "live",
+        //                 "leverage_level": 1,
+        //                 "source_exchange": "QUOINE",
+        //                 "product_id": 1,
+        //                 "product_code": "CASH",
+        //                 "funding_currency": "USD",
+        //                 "currency_pair_code": "BTCUSD",
+        //                 "order_fee": "0.0",
+        //                 "executions": [], // optional
+        //             }
+        //         ],
+        //         "current_page": 1,
+        //         "total_pages": 1
+        //     }
+        //
+        const orders = this.safeValue (response, 'models', []);
         return this.parseOrders (orders, market, since, limit);
     }
 
-    fetchOpenOrders (symbol = undefined, since = undefined, limit = undefined, params = {}) {
-        return this.fetchOrders (symbol, since, limit, this.extend ({ 'status': 'open' }, params));
+    async fetchOpenOrders (symbol = undefined, since = undefined, limit = undefined, params = {}) {
+        const request = { 'status': 'live' };
+        return await this.fetchOrders (symbol, since, limit, this.extend (request, params));
     }
 
-    fetchClosedOrders (symbol = undefined, since = undefined, limit = undefined, params = {}) {
-        return this.fetchOrders (symbol, since, limit, this.extend ({ 'status': 'closed' }, params));
+    async fetchClosedOrders (symbol = undefined, since = undefined, limit = undefined, params = {}) {
+        const request = { 'status': 'filled' };
+        return await this.fetchOrders (symbol, since, limit, this.extend (request, params));
+    }
+
+    async withdraw (code, amount, address, tag = undefined, params = {}) {
+        this.checkAddress (address);
+        await this.loadMarkets ();
+        const currency = this.currency (code);
+        const request = {
+            // 'auth_code': '', // optional 2fa code
+            'currency': currency['id'],
+            'address': address,
+            'amount': this.currencyToPrecision (code, amount),
+            // 'payment_id': tag, // for XRP only
+            // 'memo_type': 'text', // 'text', 'id' or 'hash', for XLM only
+            // 'memo_value': tag, // for XLM only
+        };
+        if (tag !== undefined) {
+            if (code === 'XRP') {
+                request['payment_id'] = tag;
+            } else if (code === 'XLM') {
+                request['memo_type'] = 'text'; // overrideable via params
+                request['memo_value'] = tag;
+            } else {
+                throw new NotSupported (this.id + ' withdraw() only supports a tag along the address for XRP or XLM');
+            }
+        }
+        const response = await this.privatePostCryptoWithdrawals (this.extend (request, params));
+        //
+        //     {
+        //         "id": 1353,
+        //         "address": "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2",
+        //         "amount": 1.0,
+        //         "state": "pending",
+        //         "currency": "BTC",
+        //         "withdrawal_fee": 0.0,
+        //         "created_at": 1568016450,
+        //         "updated_at": 1568016450,
+        //         "payment_id": null
+        //     }
+        //
+        return this.parseTransaction (response, currency);
+    }
+
+    parseTransactionStatus (status) {
+        const statuses = {
+            'pending': 'pending',
+            'cancelled': 'canceled',
+            'approved': 'ok',
+        };
+        return this.safeString (statuses, status, status);
+    }
+
+    parseTransaction (transaction, currency = undefined) {
+        //
+        // withdraw
+        //
+        //     {
+        //         "id": 1353,
+        //         "address": "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2",
+        //         "amount": 1.0,
+        //         "state": "pending",
+        //         "currency": "BTC",
+        //         "withdrawal_fee": 0.0,
+        //         "created_at": 1568016450,
+        //         "updated_at": 1568016450,
+        //         "payment_id": null
+        //     }
+        //
+        // fetchDeposits, fetchWithdrawals
+        //
+        //     ...
+        //
+        const id = this.safeString (transaction, 'id');
+        const address = this.safeString (transaction, 'address');
+        const tag = this.safeString2 (transaction, 'payment_id', 'memo_value');
+        const txid = undefined;
+        const currencyId = this.safeString (transaction, 'asset');
+        const code = this.safeCurrencyCode (currencyId, currency);
+        const timestamp = this.safeTimestamp (transaction, 'created_at');
+        const updated = this.safeTimestamp (transaction, 'updated_at');
+        const type = 'withdrawal';
+        const status = this.parseTransactionStatus (this.safeString (transaction, 'state'));
+        const amount = this.safeFloat (transaction, 'amount');
+        return {
+            'info': transaction,
+            'id': id,
+            'txid': txid,
+            'timestamp': timestamp,
+            'datetime': this.iso8601 (timestamp),
+            'address': address,
+            'tag': tag,
+            'type': type,
+            'amount': amount,
+            'currency': code,
+            'status': status,
+            'updated': updated,
+            'fee': undefined,
+        };
     }
 
     nonce () {
@@ -636,7 +873,7 @@ module.exports = class liquid extends Exchange {
 
     sign (path, api = 'public', method = 'GET', params = {}, headers = undefined, body = undefined) {
         let url = '/' + this.implodeParams (path, params);
-        let query = this.omit (params, this.extractParams (path));
+        const query = this.omit (params, this.extractParams (path));
         headers = {
             'X-Quoine-API-Version': this.version,
             'Content-Type': 'application/json',
@@ -644,38 +881,37 @@ module.exports = class liquid extends Exchange {
         if (api === 'private') {
             this.checkRequiredCredentials ();
             if (method === 'GET') {
-                if (Object.keys (query).length)
+                if (Object.keys (query).length) {
                     url += '?' + this.urlencode (query);
+                }
             } else if (Object.keys (query).length) {
                 body = this.json (query);
             }
-            let nonce = this.nonce ();
-            let request = {
+            const nonce = this.nonce ();
+            const request = {
                 'path': url,
                 'nonce': nonce,
                 'token_id': this.apiKey,
                 'iat': Math.floor (nonce / 1000), // issued at
             };
-            headers['X-Quoine-Auth'] = this.jwt (request, this.secret);
+            headers['X-Quoine-Auth'] = this.jwt (request, this.encode (this.secret));
         } else {
-            if (Object.keys (query).length)
+            if (Object.keys (query).length) {
                 url += '?' + this.urlencode (query);
+            }
         }
         url = this.urls['api'] + url;
         return { 'url': url, 'method': method, 'body': body, 'headers': headers };
     }
 
-    handleErrors (code, reason, url, method, headers, body, response) {
-        if (code >= 200 && code < 300)
+    handleErrors (code, reason, url, method, headers, body, response, requestHeaders, requestBody) {
+        if (code >= 200 && code < 300) {
             return;
-        const exceptions = this.exceptions;
+        }
         if (code === 401) {
             // expected non-json response
-            if (body in exceptions) {
-                throw new exceptions[body] (this.id + ' ' + body);
-            } else {
-                return;
-            }
+            this.throwExactlyMatchedException (this.exceptions, body, body);
+            return;
         }
         if (code === 429) {
             throw new DDoSProtection (this.id + ' ' + body);
@@ -690,9 +926,7 @@ module.exports = class liquid extends Exchange {
             //
             //  { "message": "Order not found" }
             //
-            if (message in exceptions) {
-                throw new exceptions[message] (feedback);
-            }
+            this.throwExactlyMatchedException (this.exceptions, message, feedback);
         } else if (errors !== undefined) {
             //
             //  { "errors": { "user": ["not_enough_free_balance"] }}
@@ -705,8 +939,7 @@ module.exports = class liquid extends Exchange {
                 const errorMessages = errors[type];
                 for (let j = 0; j < errorMessages.length; j++) {
                     const message = errorMessages[j];
-                    if (message in exceptions)
-                        throw new exceptions[message] (feedback);
+                    this.throwExactlyMatchedException (this.exceptions, message, feedback);
                 }
             }
         } else {
@@ -715,13 +948,13 @@ module.exports = class liquid extends Exchange {
     }
 
     _websocketOnMessage (contextId, data) {
-        let msg = JSON.parse (data);
+        const msg = JSON.parse (data);
         // console.log (data);
-        let evt = this.safeString (msg, 'event');
+        const evt = this.safeString (msg, 'event');
         if (evt === 'subscription_succeeded') {
             this._websocketHandleSubscription (contextId, msg);
         } else if (evt === 'updated') {
-            let chan = this.safeString (msg, 'channel');
+            const chan = this.safeString (msg, 'channel');
             if (chan.indexOf ('price_ladders_cash_') >= 0) {
                 this._websocketHandleOrderbook (contextId, msg);
             }
@@ -729,8 +962,8 @@ module.exports = class liquid extends Exchange {
     }
 
     _websocketHandleOrderbook (contextId, msg) {
-        let chan = this.safeString (msg, 'channel');
-        let parts = chan.split ('_');
+        const chan = this.safeString (msg, 'channel');
+        const parts = chan.split ('_');
         let symbol = parts[3];
         const symbolMap = this._contextGet (contextId, 'symbolmap');
         if (symbol in symbolMap) {
@@ -746,7 +979,7 @@ module.exports = class liquid extends Exchange {
                 'asks': [],
             };
         }
-        let data = this.safeValue (msg, 'data');
+        const data = this.safeValue (msg, 'data');
         if (parts[4] === 'buy') {
             symbolData['ob']['bids'] = data;
         } else {
@@ -757,21 +990,21 @@ module.exports = class liquid extends Exchange {
     }
 
     _websocketHandleSubscription (contextId, msg) {
-        let chan = this.safeString (msg, 'channel');
+        const chan = this.safeString (msg, 'channel');
         if (chan.indexOf ('price_ladders_cash_') >= 0) {
-            let parts = chan.split ('_');
+            const parts = chan.split ('_');
             let symbol = parts[3];
             const symbolMap = this._contextGet (contextId, 'symbolmap');
             if (symbol in symbolMap) {
                 symbol = symbolMap[symbol];
             }
-            let buyOrSell = (parts[4] === 'buy') ? 'buy_sub' : 'sell_sub';
-            let symbolData = this._contextGetSymbolData (contextId, 'ob', symbol);
+            const buyOrSell = (parts[4] === 'buy') ? 'buy_sub' : 'sell_sub';
+            const symbolData = this._contextGetSymbolData (contextId, 'ob', symbol);
             if ('sub-nonces' in symbolData) {
-                let nonces = symbolData['sub-nonces'];
+                const nonces = symbolData['sub-nonces'];
                 const keys = Object.keys (nonces);
                 for (let i = 0; i < keys.length; i++) {
-                    let nonce = keys[i];
+                    const nonce = keys[i];
                     nonces[nonce][buyOrSell] = true;
                     if ((nonces[nonce]['buy_sub']) && (nonces[nonce]['sell_sub'])) {
                         this._cancelTimeout (nonces[nonce]['handle']);
@@ -786,7 +1019,7 @@ module.exports = class liquid extends Exchange {
     }
 
     _websocketOnOpen (contextId, websocketOptions) { // eslint-disable-line no-unused-vars
-        let symbolMap = {};
+        const symbolMap = {};
         this._contextSet (contextId, 'symbolmap', symbolMap);
     }
 
@@ -795,13 +1028,13 @@ module.exports = class liquid extends Exchange {
             throw new NotSupported ('subscribe ' + event + '(' + symbol + ') not supported for exchange ' + this.id);
         }
         // save nonce for subscription response
-        let symbolData = this._contextGetSymbolData (contextId, event, symbol);
+        const symbolData = this._contextGetSymbolData (contextId, event, symbol);
         if (!('sub-nonces' in symbolData)) {
             symbolData['sub-nonces'] = {};
         }
         symbolData['limit'] = this.safeInteger (params, 'limit', undefined);
-        let nonceStr = nonce.toString ();
-        let handle = this._setTimeout (contextId, this.timeout, this._websocketMethodMap ('_websocketTimeoutRemoveNonce'), [contextId, nonceStr, event, symbol, 'sub-nonce']);
+        const nonceStr = nonce.toString ();
+        const handle = this._setTimeout (contextId, this.timeout, this._websocketMethodMap ('_websocketTimeoutRemoveNonce'), [contextId, nonceStr, event, symbol, 'sub-nonce']);
         symbolData['sub-nonces'][nonceStr] = {
             'handle': handle,
             'buy_sub': false,
@@ -827,7 +1060,7 @@ module.exports = class liquid extends Exchange {
         if (event !== 'ob') {
             throw new NotSupported ('unsubscribe ' + event + '(' + symbol + ') not supported for exchange ' + this.id);
         }
-        let id = this._websocketMarketId (symbol);
+        const id = this._websocketMarketId (symbol);
         this.websocketSendJson ({
             'event': 'unsubscribe',
             'channel': 'price_ladders_cash_' + id + '_buy',
@@ -836,14 +1069,14 @@ module.exports = class liquid extends Exchange {
             'event': 'unsubscribe',
             'channel': 'price_ladders_cash_' + id + '_sell',
         });
-        let nonceStr = nonce.toString ();
+        const nonceStr = nonce.toString ();
         this.emit (nonceStr, true);
     }
 
     _websocketTimeoutRemoveNonce (contextId, timerNonce, event, symbol, key) {
-        let symbolData = this._contextGetSymbolData (contextId, event, symbol);
+        const symbolData = this._contextGetSymbolData (contextId, event, symbol);
         if (key in symbolData) {
-            let nonces = symbolData[key];
+            const nonces = symbolData[key];
             if (timerNonce in nonces) {
                 this.omit (symbolData[key], timerNonce);
                 this._contextSetSymbolData (contextId, event, symbol, symbolData);
@@ -852,17 +1085,17 @@ module.exports = class liquid extends Exchange {
     }
 
     _websocketMarketId (symbol) {
-        let market = this.findMarket (symbol);
+        const market = this.findMarket (symbol);
         if (typeof market !== 'undefined') {
-            let baseId = market['baseId'].toLowerCase ();
-            let quoteId = market['quoteId'].toLowerCase ();
+            const baseId = market['baseId'].toLowerCase ();
+            const quoteId = market['quoteId'].toLowerCase ();
             return baseId + quoteId;
         }
         return symbol;
     }
 
     _getCurrentWebsocketOrderbook (contextId, symbol, limit) {
-        let data = this._contextGetSymbolData (contextId, 'ob', symbol);
+        const data = this._contextGetSymbolData (contextId, 'ob', symbol);
         if (('ob' in data) && (typeof data['ob'] !== 'undefined')) {
             return this._cloneOrderBook (data['ob'], limit);
         }

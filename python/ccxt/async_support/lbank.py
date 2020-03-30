@@ -5,13 +5,15 @@
 
 from ccxt.async_support.base.exchange import Exchange
 import math
+import json
 from ccxt.base.errors import ExchangeError
 from ccxt.base.errors import AuthenticationError
 from ccxt.base.errors import InvalidOrder
+from ccxt.base.errors import NotSupported
 from ccxt.base.errors import DDoSProtection
 
 
-class lbank (Exchange):
+class lbank(Exchange):
 
     def describe(self):
         return self.deep_extend(super(lbank, self).describe(), {
@@ -46,7 +48,8 @@ class lbank (Exchange):
                 'api': 'https://api.lbank.info',
                 'www': 'https://www.lbank.info',
                 'doc': 'https://github.com/LBank-exchange/lbank-official-api-docs',
-                'fees': 'https://lbankinfo.zendesk.com/hc/zh-cn/articles/115002295114--%E8%B4%B9%E7%8E%87%E8%AF%B4%E6%98%8E',
+                'fees': 'https://lbankinfo.zendesk.com/hc/en-gb/articles/360012072873-Trading-Fees',
+                'referral': 'https://www.lbex.io/invite?icode=7QCY',
             },
             'api': {
                 'public': {
@@ -71,6 +74,27 @@ class lbank (Exchange):
                         'withdraws',
                         'withdrawConfigs',
                     ],
+                },
+            },
+            'wsconf': {
+                'conx-tpls': {
+                    'default': {
+                        'type': 'ws',
+                        'baseurl': 'wss://api.lbank.info/ws',
+                        'wait-after-connect': 1000,
+                    },
+                },
+                'methodmap': {
+                    '_websocketTimeoutRemoveNonce': '_websocketTimeoutRemoveNonce',
+                },
+                'events': {
+                    'ob': {
+                        'conx-tpl': 'default',
+                        'conx-param': {
+                            'url': '{baseurl}',
+                            'id': '{id}',
+                        },
+                    },
                 },
             },
             'fees': {
@@ -108,13 +132,16 @@ class lbank (Exchange):
             'commonCurrencies': {
                 'VET_ERC20': 'VEN',
             },
+            'options': {
+                'cacheSecretAsPem': True,
+            },
         })
 
     async def fetch_markets(self, params={}):
-        markets = await self.publicGetAccuracy()
+        response = await self.publicGetAccuracy(params)
         result = []
-        for i in range(0, len(markets)):
-            market = markets[i]
+        for i in range(0, len(response)):
+            market = response[i]
             id = market['symbol']
             parts = id.split('_')
             baseId = None
@@ -127,8 +154,8 @@ class lbank (Exchange):
             else:
                 baseId = parts[0]
                 quoteId = parts[1]
-            base = self.common_currency_code(baseId.upper())
-            quote = self.common_currency_code(quoteId.upper())
+            base = self.safe_currency_code(baseId)
+            quote = self.safe_currency_code(quoteId)
             symbol = base + '/' + quote
             precision = {
                 'amount': self.safe_integer(market, 'quantityAccuracy'),
@@ -180,18 +207,24 @@ class lbank (Exchange):
                 else:
                     baseId = parts[0]
                     quoteId = parts[1]
-                base = self.common_currency_code(baseId.upper())
-                quote = self.common_currency_code(quoteId.upper())
+                base = self.safe_currency_code(baseId)
+                quote = self.safe_currency_code(quoteId)
                 symbol = base + '/' + quote
         timestamp = self.safe_integer(ticker, 'timestamp')
         info = ticker
         ticker = info['ticker']
         last = self.safe_float(ticker, 'latest')
         percentage = self.safe_float(ticker, 'change')
-        relativeChange = percentage / 100
-        open = last / self.sum(1, relativeChange)
-        change = last - open
-        average = self.sum(last, open) / 2
+        open = None
+        if percentage is not None:
+            relativeChange = self.sum(1, percentage / 100)
+            if relativeChange > 0:
+                open = last / self.sum(1, relativeChange)
+        change = None
+        average = None
+        if last is not None and open is not None:
+            change = last - open
+            average = self.sum(last, open) / 2
         if market is not None:
             symbol = market['symbol']
         return {
@@ -220,19 +253,21 @@ class lbank (Exchange):
     async def fetch_ticker(self, symbol, params={}):
         await self.load_markets()
         market = self.market(symbol)
-        response = await self.publicGetTicker(self.extend({
+        request = {
             'symbol': market['id'],
-        }, params))
+        }
+        response = await self.publicGetTicker(self.extend(request, params))
         return self.parse_ticker(response, market)
 
     async def fetch_tickers(self, symbols=None, params={}):
         await self.load_markets()
-        tickers = await self.publicGetTicker(self.extend({
+        request = {
             'symbol': 'all',
-        }, params))
+        }
+        response = await self.publicGetTicker(self.extend(request, params))
         result = {}
-        for i in range(0, len(tickers)):
-            ticker = self.parse_ticker(tickers[i])
+        for i in range(0, len(response)):
+            ticker = self.parse_ticker(response[i])
             symbol = ticker['symbol']
             result[symbol] = ticker
         return result
@@ -242,31 +277,41 @@ class lbank (Exchange):
         size = 60
         if limit is not None:
             size = min(limit, size)
-        response = await self.publicGetDepth(self.extend({
+        request = {
             'symbol': self.market_id(symbol),
             'size': size,
-        }, params))
+        }
+        response = await self.publicGetDepth(self.extend(request, params))
         return self.parse_order_book(response)
 
     def parse_trade(self, trade, market=None):
-        symbol = market['symbol']
-        timestamp = int(trade['date_ms'])
+        symbol = None
+        if market is not None:
+            symbol = market['symbol']
+        timestamp = self.safe_integer(trade, 'date_ms')
         price = self.safe_float(trade, 'price')
         amount = self.safe_float(trade, 'amount')
-        cost = self.cost_to_precision(symbol, price * amount)
+        cost = None
+        if price is not None:
+            if amount is not None:
+                cost = float(self.cost_to_precision(symbol, price * amount))
+        id = self.safe_string(trade, 'tid')
+        type = None
+        side = self.safe_string(trade, 'type')
         return {
+            'id': id,
+            'info': self.safe_value(trade, 'info', trade),
             'timestamp': timestamp,
             'datetime': self.iso8601(timestamp),
             'symbol': symbol,
-            'id': self.safe_string(trade, 'tid'),
             'order': None,
-            'type': None,
-            'side': trade['type'],
+            'type': type,
+            'side': side,
+            'takerOrMaker': None,
             'price': price,
             'amount': amount,
-            'cost': float(cost),
+            'cost': cost,
             'fee': None,
-            'info': self.safe_value(trade, 'info', trade),
         }
 
     async def fetch_trades(self, symbol, since=None, limit=None, params={}):
@@ -297,9 +342,9 @@ class lbank (Exchange):
         await self.load_markets()
         market = self.market(symbol)
         if since is None:
-            raise ExchangeError(self.id + ' fetchOHLCV requires a since argument')
+            raise ExchangeError(self.id + ' fetchOHLCV requires a `since` argument')
         if limit is None:
-            raise ExchangeError(self.id + ' fetchOHLCV requires a limit argument')
+            raise ExchangeError(self.id + ' fetchOHLCV requires a `limit` argument')
         request = {
             'symbol': market['id'],
             'type': self.timeframes[timeframe],
@@ -312,21 +357,41 @@ class lbank (Exchange):
     async def fetch_balance(self, params={}):
         await self.load_markets()
         response = await self.privatePostUserInfo(params)
+        #
+        #     {
+        #         "result":"true",
+        #         "info":{
+        #             "freeze":{
+        #                 "iog":"0.00000000",
+        #                 "ssc":"0.00000000",
+        #                 "eon":"0.00000000",
+        #             },
+        #             "asset":{
+        #                 "iog":"0.00000000",
+        #                 "ssc":"0.00000000",
+        #                 "eon":"0.00000000",
+        #             },
+        #             "free":{
+        #                 "iog":"0.00000000",
+        #                 "ssc":"0.00000000",
+        #                 "eon":"0.00000000",
+        #             },
+        #         }
+        #     }
+        #
         result = {'info': response}
-        ids = list(self.extend(response['info']['free'], response['info']['freeze']).keys())
-        for i in range(0, len(ids)):
-            id = ids[i]
-            code = id
-            if id in self.currencies_by_id:
-                code = self.currencies_by_id[id]['code']
-            free = self.safe_float(response['info']['free'], id, 0.0)
-            used = self.safe_float(response['info']['freeze'], id, 0.0)
-            account = {
-                'free': free,
-                'used': used,
-                'total': 0.0,
-            }
-            account['total'] = self.sum(account['free'], account['used'])
+        info = self.safe_value(response, 'info', {})
+        free = self.safe_value(info, 'free', {})
+        freeze = self.safe_value(info, 'freeze', {})
+        asset = self.safe_value(info, 'asset', {})
+        currencyIds = list(free.keys())
+        for i in range(0, len(currencyIds)):
+            currencyId = currencyIds[i]
+            code = self.safe_currency_code(currencyId)
+            account = self.account()
+            account['free'] = self.safe_float(free, currencyId)
+            account['used'] = self.safe_float(freeze, currencyId)
+            account['total'] = self.safe_float(asset, currencyId)
             result[code] = account
         return self.parse_balance(result)
 
@@ -358,20 +423,27 @@ class lbank (Exchange):
         if av_price is not None:
             cost = filled * av_price
         status = self.parse_order_status(self.safe_string(order, 'status'))
+        id = self.safe_string(order, 'order_id')
+        type = self.safe_string(order, 'order_type')
+        side = self.safe_string(order, 'type')
+        remaining = None
+        if amount is not None:
+            if filled is not None:
+                remaining = amount - filled
         return {
-            'id': self.safe_string(order, 'order_id'),
+            'id': id,
             'datetime': self.iso8601(timestamp),
             'timestamp': timestamp,
             'lastTradeTimestamp': None,
             'status': status,
             'symbol': symbol,
-            'type': self.safe_string(order, 'order_type'),
-            'side': order['type'],
+            'type': type,
+            'side': side,
             'price': price,
             'cost': cost,
             'amount': amount,
             'filled': filled,
-            'remaining': amount - filled,
+            'remaining': remaining,
             'trades': None,
             'fee': None,
             'info': self.safe_value(order, 'info', order),
@@ -404,22 +476,25 @@ class lbank (Exchange):
     async def cancel_order(self, id, symbol=None, params={}):
         await self.load_markets()
         market = self.market(symbol)
-        response = await self.privatePostCancelOrder(self.extend({
+        request = {
             'symbol': market['id'],
             'order_id': id,
-        }, params))
+        }
+        response = await self.privatePostCancelOrder(self.extend(request, params))
         return response
 
     async def fetch_order(self, id, symbol=None, params={}):
         # Id can be a list of ids delimited by a comma
         await self.load_markets()
         market = self.market(symbol)
-        response = await self.privatePostOrdersInfo(self.extend({
+        request = {
             'symbol': market['id'],
             'order_id': id,
-        }, params))
+        }
+        response = await self.privatePostOrdersInfo(self.extend(request, params))
         orders = self.parse_orders(response['orders'], market)
-        if len(orders) == 1:
+        numOrders = len(orders)
+        if numOrders == 1:
             return orders[0]
         else:
             return orders
@@ -429,18 +504,20 @@ class lbank (Exchange):
         if limit is None:
             limit = 100
         market = self.market(symbol)
-        response = await self.privatePostOrdersInfoHistory(self.extend({
+        request = {
             'symbol': market['id'],
             'current_page': 1,
             'page_length': limit,
-        }, params))
+        }
+        response = await self.privatePostOrdersInfoHistory(self.extend(request, params))
         return self.parse_orders(response['orders'], None, since, limit)
 
     async def fetch_closed_orders(self, symbol=None, since=None, limit=None, params={}):
         orders = await self.fetch_orders(symbol, since, limit, params)
         closed = self.filter_by(orders, 'status', 'closed')
-        cancelled = self.filter_by(orders, 'status', 'cancelled')  # cancelled orders may be partially filled
-        return closed + cancelled
+        canceled = self.filter_by(orders, 'status', 'cancelled')  # cancelled orders may be partially filled
+        allOrders = self.array_concat(closed, canceled)
+        return self.filter_by_symbol_since_limit(allOrders, symbol, since, limit)
 
     async def withdraw(self, code, amount, address, tag=None, params={}):
         # mark and fee are optional params, mark is a note and must be less than 255 characters
@@ -460,6 +537,18 @@ class lbank (Exchange):
             'info': response,
         }
 
+    def convert_secret_to_pem(self, secret):
+        lineLength = 64
+        secretLength = len(secret) - 0
+        numLines = int(secretLength / lineLength)
+        numLines = self.sum(numLines, 1)
+        pem = "-----BEGIN PRIVATE KEY-----\n"  # eslint-disable-line
+        for i in range(0, numLines):
+            start = i * lineLength
+            end = self.sum(start, lineLength)
+            pem += self.secret[start:end] + "\n"  # eslint-disable-line
+        return pem + '-----END PRIVATE KEY-----'
+
     def sign(self, path, api='public', method='GET', params={}, headers=None, body=None):
         query = self.omit(params, self.extract_params(path))
         url = self.urls['api'] + '/' + self.version + '/' + self.implode_params(path, params)
@@ -473,8 +562,19 @@ class lbank (Exchange):
             query = self.keysort(self.extend({
                 'api_key': self.apiKey,
             }, params))
-            queryString = self.rawencode(query) + '&secret_key=' + self.secret
-            query['sign'] = self.hash(self.encode(queryString)).upper()
+            queryString = self.rawencode(query)
+            message = self.hash(self.encode(queryString)).upper()
+            cacheSecretAsPem = self.safe_value(self.options, 'cacheSecretAsPem', True)
+            pem = None
+            if cacheSecretAsPem:
+                pem = self.safe_value(self.options, 'pem')
+                if pem is None:
+                    pem = self.convert_secret_to_pem(self.secret)
+                    self.options['pem'] = pem
+            else:
+                pem = self.convert_secret_to_pem(self.secret)
+            sign = self.binaryToBase64(self.rsa(message, self.encode(pem), 'RS256'))
+            query['sign'] = sign
             body = self.urlencode(query)
             headers = {'Content-Type': 'application/x-www-form-urlencoded'}
         return {'url': url, 'method': method, 'body': body, 'headers': headers}
@@ -526,3 +626,106 @@ class lbank (Exchange):
             }, errorCode, ExchangeError)
             raise ErrorClass(message)
         return response
+
+    def _websocket_on_message(self, contextId, data):
+        msg = json.loads(data)
+        success = self.safe_string(msg, 'success')
+        channel = self.safe_string(msg, 'channel')
+        if success is not None:
+            # subscription
+            parts = channel.split('_')
+            partsLen = len(parts)
+            if partsLen > 5:
+                if parts[5] == 'depth':
+                    # orderbook
+                    symbol = self._websocketFindSymbol(parts[3] + '_' + parts[4])
+                    # try to match with subscription
+                    found = False
+                    data = self._contextGetSymbolData(contextId, 'ob', symbol)
+                    if 'sub-nonces' in data:
+                        nonces = data['sub-nonces']
+                        keys = list(nonces.keys())
+                        for i in range(0, len(keys)):
+                            found = True
+                            nonce = keys[i]
+                            self._cancelTimeout(nonces[nonce])
+                            self.emit(nonce, success == 'true')
+                        data['sub-nonces'] = {}
+                    # if not found try unsubscription
+                    if not found:
+                        if 'unsub-nonces' in data:
+                            nonces = data['unsub-nonces']
+                            keys = list(nonces.keys())
+                            for i in range(0, len(keys)):
+                                found = True
+                                nonce = keys[i]
+                                self._cancelTimeout(nonces[nonce])
+                                self.emit(nonce, success == 'true')
+                            data['unsub-nonces'] = {}
+                    self._contextSetSymbolData(contextId, 'ob', symbol, data)
+        else:
+            parts = channel.split('_')
+            partsLen = len(parts)
+            if partsLen > 5:
+                if parts[5] == 'depth':
+                    symbol = self._websocketFindSymbol(parts[3] + '_' + parts[4])
+                    self._websocket_handle_ob(contextId, msg, symbol)
+            else:
+                self.emit('err', new ExchangeError(self.id + ' invalid channel ' + channel))
+
+    def _websocket_handle_ob(self, contextId, msg, symbol):
+        ob = self.parse_order_book(msg)
+        data = self._contextGetSymbolData(contextId, 'ob', symbol)
+        data['ob'] = ob
+        self._contextSetSymbolData(contextId, 'ob', symbol, data)
+        self.emit('ob', symbol, self._cloneOrderBook(ob, data['limit']))
+
+    def _websocket_subscribe(self, contextId, event, symbol, nonce, params={}):
+        if event != 'ob':
+            raise NotSupported('subscribe ' + event + '(' + symbol + ') not supported for exchange ' + self.id)
+        id = self.market_id(symbol)
+        payload = {
+            'event': 'addChannel',
+            'channel': 'lh_sub_spot_' + id + '_depth_60',
+        }
+        data = self._contextGetSymbolData(contextId, event, symbol)
+        data['limit'] = self.safe_integer(params, 'limit', None)
+        if not ('sub-nonces' in data):
+            data['sub-nonces'] = {}
+        nonceStr = str(nonce)
+        handle = self._setTimeout(contextId, self.timeout, self._websocketMethodMap('_websocketTimeoutRemoveNonce'), [contextId, nonceStr, event, symbol, 'sub-nonces'])
+        data['sub-nonces'][nonceStr] = handle
+        self._contextSetSymbolData(contextId, event, symbol, data)
+        self.websocketSendJson(payload)
+
+    def _websocket_unsubscribe(self, contextId, event, symbol, nonce, params={}):
+        if event != 'ob':
+            raise NotSupported('unsubscribe ' + event + '(' + symbol + ') not supported for exchange ' + self.id)
+        id = self.market_id(symbol)
+        payload = {
+            'event': 'removeChannel',
+            'channel': 'lh_sub_spot_' + id + '_depth_60',
+            'id': nonce,
+        }
+        data = self._contextGetSymbolData(contextId, event, symbol)
+        if not ('unsub-nonces' in data):
+            data['unsub-nonces'] = {}
+        nonceStr = str(nonce)
+        handle = self._setTimeout(contextId, self.timeout, self._websocketMethodMap('_websocketTimeoutRemoveNonce'), [contextId, nonceStr, event, symbol, 'unsub-nonces'])
+        data['unsub-nonces'][nonceStr] = handle
+        self._contextSetSymbolData(contextId, event, symbol, data)
+        self.websocketSendJson(payload)
+
+    def _websocket_timeout_remove_nonce(self, contextId, timerNonce, event, symbol, key):
+        data = self._contextGetSymbolData(contextId, event, symbol)
+        if key in data:
+            nonces = data[key]
+            if timerNonce in nonces:
+                self.omit(data[key], timerNonce)
+                self._contextSetSymbolData(contextId, event, symbol, data)
+
+    def _get_current_websocket_orderbook(self, contextId, symbol, limit):
+        data = self._contextGetSymbolData(contextId, 'ob', symbol)
+        if ('ob' in data) and (data['ob'] is not None):
+            return self._cloneOrderBook(data['ob'], limit)
+        return None

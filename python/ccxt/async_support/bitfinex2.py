@@ -6,17 +6,18 @@
 from ccxt.async_support.bitfinex import bitfinex
 import hashlib
 import math
+import json
 from ccxt.base.errors import ExchangeError
 from ccxt.base.errors import InsufficientFunds
 from ccxt.base.errors import NotSupported
 
 
-class bitfinex2 (bitfinex):
+class bitfinex2(bitfinex):
 
     def describe(self):
         return self.deep_extend(super(bitfinex2, self).describe(), {
             'id': 'bitfinex2',
-            'name': 'Bitfinex v2',
+            'name': 'Bitfinex',
             'countries': ['VG'],
             'version': 'v2',
             'certified': False,
@@ -31,11 +32,12 @@ class bitfinex2 (bitfinex):
                 'fetchDepositAddress': False,
                 'fetchClosedOrders': False,
                 'fetchFundingFees': False,
-                'fetchMyTrades': False,
+                'fetchMyTrades': True,
                 'fetchOHLCV': True,
                 'fetchOpenOrders': False,
                 'fetchOrder': True,
                 'fetchTickers': True,
+                'fetchTradingFee': False,
                 'fetchTradingFees': False,
                 'withdraw': True,
             },
@@ -56,10 +58,14 @@ class bitfinex2 (bitfinex):
             'rateLimit': 1500,
             'urls': {
                 'logo': 'https://user-images.githubusercontent.com/1294454/27766244-e328a50c-5ed2-11e7-947b-041416579bb3.jpg',
-                'api': 'https://api.bitfinex.com',
+                'api': {
+                    'v1': 'https://api.bitfinex.com',
+                    'public': 'https://api-pub.bitfinex.com',
+                    'private': 'https://api.bitfinex.com',
+                },
                 'www': 'https://www.bitfinex.com',
                 'doc': [
-                    'https://bitfinex.readme.io/v2/docs',
+                    'https://docs.bitfinex.com/v2/docs/',
                     'https://github.com/bitfinexcom/bitfinex-api-node',
                 ],
                 'fees': 'https://www.bitfinex.com/fees',
@@ -73,6 +79,7 @@ class bitfinex2 (bitfinex):
                 },
                 'public': {
                     'get': [
+                        'conf/pub:map:currency:label',
                         'platform/status',
                         'tickers',
                         'ticker/{symbol}',
@@ -105,9 +112,12 @@ class bitfinex2 (bitfinex):
                         'auth/r/orders/{symbol}/new',
                         'auth/r/orders/{symbol}/hist',
                         'auth/r/order/{symbol}:{id}/trades',
+                        'auth/w/order/submit',
                         'auth/r/trades/hist',
                         'auth/r/trades/{symbol}/hist',
                         'auth/r/positions',
+                        'auth/r/positions/hist',
+                        'auth/r/positions/audit',
                         'auth/r/funding/offers/{symbol}',
                         'auth/r/funding/offers/{symbol}/hist',
                         'auth/r/funding/loans/{symbol}',
@@ -117,6 +127,7 @@ class bitfinex2 (bitfinex):
                         'auth/r/funding/trades/{symbol}/hist',
                         'auth/r/info/margin/{key}',
                         'auth/r/info/funding/{key}',
+                        'auth/r/ledgers/hist',
                         'auth/r/movements/hist',
                         'auth/r/movements/{currency}/hist',
                         'auth/r/stats/perf:{timeframe}/hist',
@@ -139,12 +150,12 @@ class bitfinex2 (bitfinex):
                 },
                 'funding': {
                     'withdraw': {
-                        'BTC': 0.0005,
-                        'BCH': 0.0005,
-                        'ETH': 0.01,
-                        'EOS': 0.1,
+                        'BTC': 0.0004,
+                        'BCH': 0.0001,
+                        'ETH': 0.00135,
+                        'EOS': 0.0,
                         'LTC': 0.001,
-                        'OMG': 0.1,
+                        'OMG': 0.15097,
                         'IOT': 0.0,
                         'NEO': 0.0,
                         'ETC': 0.01,
@@ -153,51 +164,108 @@ class bitfinex2 (bitfinex):
                         'ZEC': 0.001,
                         'BTG': 0.0,
                         'DASH': 0.01,
-                        'XMR': 0.04,
+                        'XMR': 0.0001,
                         'QTM': 0.01,
-                        'EDO': 0.5,
-                        'DAT': 1.0,
-                        'AVT': 0.5,
-                        'SAN': 0.1,
+                        'EDO': 0.23687,
+                        'DAT': 9.8858,
+                        'AVT': 1.1251,
+                        'SAN': 0.35977,
                         'USDT': 5.0,
-                        'SPK': 9.2784,
-                        'BAT': 9.0883,
-                        'GNT': 8.2881,
-                        'SNT': 14.303,
-                        'QASH': 3.2428,
-                        'YYW': 18.055,
+                        'SPK': 16.971,
+                        'BAT': 1.1209,
+                        'GNT': 2.8789,
+                        'SNT': 9.0848,
+                        'QASH': 1.726,
+                        'YYW': 7.9464,
                     },
+                },
+            },
+            'wsconf': {
+                'conx-tpls': {
+                    'default': {
+                        'type': 'ws',
+                        'baseurl': 'wss://api.bitfinex.com/ws/2',
+                        'wait4readyEvent': 'statusok',
+                    },
+                },
+                'methodmap': {
+                    '_websocketTimeoutRemoveNonce': '_websocketTimeoutRemoveNonce',
+                },
+                'events': {
+                    'ob': {
+                        'conx-tpl': 'default',
+                        'conx-param': {
+                            'url': '{baseurl}',
+                            'id': '{id}',
+                        },
+                    },
+                    'trade': {
+                        'conx-tpl': 'default',
+                        'conx-param': {
+                            'url': '{baseurl}',
+                            'id': '{id}',
+                        },
+                    },
+                },
+            },
+            'options': {
+                'precision': 'R0',  # P0, P1, P2, P3, P4, R0
+                'orderTypes': {
+                    'MARKET': None,
+                    'EXCHANGE MARKET': 'market',
+                    'LIMIT': None,
+                    'EXCHANGE LIMIT': 'limit',
+                    'STOP': None,
+                    'EXCHANGE STOP': 'stopOrLoss',
+                    'TRAILING STOP': None,
+                    'EXCHANGE TRAILING STOP': None,
+                    'FOK': None,
+                    'EXCHANGE FOK': 'limit FOK',
+                    'STOP LIMIT': None,
+                    'EXCHANGE STOP LIMIT': 'limit stop',
+                    'IOC': None,
+                    'EXCHANGE IOC': 'limit ioc',
+                },
+                'fiat': {
+                    'USD': 'USD',
+                    'EUR': 'EUR',
+                    'JPY': 'JPY',
+                    'GBP': 'GBP',
                 },
             },
         })
 
     def is_fiat(self, code):
-        fiat = {
-            'USD': 'USD',
-            'EUR': 'EUR',
-        }
-        return(code in list(fiat.keys()))
+        return(code in self.options['fiat'])
 
     def get_currency_id(self, code):
         return 'f' + code
 
     async def fetch_markets(self, params={}):
-        markets = await self.v1GetSymbolsDetails()
+        response = await self.v1GetSymbolsDetails(params)
         result = []
-        for p in range(0, len(markets)):
-            market = markets[p]
-            id = market['pair'].upper()
-            baseId = id[0:3]
-            quoteId = id[3:6]
-            base = self.common_currency_code(baseId)
-            quote = self.common_currency_code(quoteId)
+        for i in range(0, len(response)):
+            market = response[i]
+            id = self.safe_string(market, 'pair')
+            id = id.upper()
+            baseId = None
+            quoteId = None
+            if id.find(':') >= 0:
+                parts = id.split(':')
+                baseId = parts[0]
+                quoteId = parts[1]
+            else:
+                baseId = id[0:3]
+                quoteId = id[3:6]
+            base = self.safe_currency_code(baseId)
+            quote = self.safe_currency_code(quoteId)
             symbol = base + '/' + quote
             id = 't' + id
             baseId = self.get_currency_id(baseId)
             quoteId = self.get_currency_id(quoteId)
             precision = {
-                'price': market['price_precision'],
-                'amount': market['price_precision'],
+                'price': self.safe_integer(market, 'price_precision'),
+                'amount': self.safe_integer(market, 'price_precision'),
             }
             limits = {
                 'amount': {
@@ -224,12 +292,16 @@ class bitfinex2 (bitfinex):
                 'precision': precision,
                 'limits': limits,
                 'info': market,
+                'swap': False,
+                'spot': False,
+                'futures': False,
             })
         return result
 
     async def fetch_balance(self, params={}):
+        # self api call does not return the 'used' amount - use the v1 version instead(which also returns zero balances)
         await self.load_markets()
-        response = await self.privatePostAuthRWallets()
+        response = await self.privatePostAuthRWallets(params)
         balanceType = self.safe_string(params, 'type', 'exchange')
         result = {'info': response}
         for b in range(0, len(response)):
@@ -239,16 +311,12 @@ class bitfinex2 (bitfinex):
             total = balance[2]
             available = balance[4]
             if accountType == balanceType:
-                code = currency
-                if currency in self.currencies_by_id:
-                    code = self.currencies_by_id[currency]['code']
-                elif currency[0] == 't':
+                if currency[0] == 't':
                     currency = currency[1:]
-                    code = currency.upper()
-                    code = self.common_currency_code(code)
-                else:
-                    code = self.common_currency_code(code)
+                code = self.safe_currency_code(currency)
                 account = self.account()
+                # do not fill in zeroes and missing values in the parser
+                # rewrite and unify the following to use the unified parseBalance
                 account['total'] = total
                 if not available:
                     if available == 0:
@@ -264,10 +332,15 @@ class bitfinex2 (bitfinex):
 
     async def fetch_order_book(self, symbol, limit=None, params={}):
         await self.load_markets()
-        orderbook = await self.publicGetBookSymbolPrecision(self.extend({
+        precision = self.safe_value(self.options, 'precision', 'R0')
+        request = {
             'symbol': self.market_id(symbol),
-            'precision': 'R0',
-        }, params))
+            'precision': precision,
+        }
+        if limit is not None:
+            request['len'] = limit  # 25 or 100
+        fullRequest = self.extend(request, params)
+        orderbook = await self.publicGetBookSymbolPrecision(fullRequest)
         timestamp = self.milliseconds()
         result = {
             'bids': [],
@@ -276,12 +349,12 @@ class bitfinex2 (bitfinex):
             'datetime': self.iso8601(timestamp),
             'nonce': None,
         }
+        priceIndex = 1 if (fullRequest['precision'] == 'R0') else 0
         for i in range(0, len(orderbook)):
             order = orderbook[i]
-            price = order[1]
-            amount = order[2]
-            side = 'bids' if (amount > 0) else 'asks'
-            amount = abs(amount)
+            price = order[priceIndex]
+            amount = abs(order[2])
+            side = 'bids' if (order[2] > 0) else 'asks'
             result[side].append([price, amount])
         result['bids'] = self.sort_by(result['bids'], 0, True)
         result['asks'] = self.sort_by(result['asks'], 0)
@@ -290,7 +363,7 @@ class bitfinex2 (bitfinex):
     def parse_ticker(self, ticker, market=None):
         timestamp = self.milliseconds()
         symbol = None
-        if market:
+        if market is not None:
             symbol = market['symbol']
         length = len(ticker)
         last = ticker[length - 4]
@@ -339,41 +412,124 @@ class bitfinex2 (bitfinex):
     async def fetch_ticker(self, symbol, params={}):
         await self.load_markets()
         market = self.market(symbol)
-        ticker = await self.publicGetTickerSymbol(self.extend({
+        request = {
             'symbol': market['id'],
-        }, params))
+        }
+        ticker = await self.publicGetTickerSymbol(self.extend(request, params))
         return self.parse_ticker(ticker, market)
 
-    def parse_trade(self, trade, market):
-        id, timestamp, amount, price = trade
-        side = 'sell' if (amount < 0) else 'buy'
-        if amount < 0:
-            amount = -amount
+    def parse_trade(self, trade, market=None):
+        #
+        # fetchTrades(public)
+        #
+        #     [
+        #         ID,
+        #         MTS,  # timestamp
+        #         AMOUNT,
+        #         PRICE
+        #     ]
+        #
+        # fetchMyTrades(private)
+        #
+        #     [
+        #         ID,
+        #         PAIR,
+        #         MTS_CREATE,
+        #         ORDER_ID,
+        #         EXEC_AMOUNT,
+        #         EXEC_PRICE,
+        #         ORDER_TYPE,
+        #         ORDER_PRICE,
+        #         MAKER,
+        #         FEE,
+        #         FEE_CURRENCY,
+        #         ...
+        #     ]
+        #
+        tradeLength = len(trade)
+        isPrivate = (tradeLength > 5)
+        id = str(trade[0])
+        amountIndex = 4 if isPrivate else 2
+        amount = trade[amountIndex]
+        cost = None
+        priceIndex = 5 if isPrivate else 3
+        price = trade[priceIndex]
+        side = None
+        orderId = None
+        takerOrMaker = None
+        type = None
+        fee = None
+        symbol = None
+        timestampIndex = 2 if isPrivate else 1
+        timestamp = trade[timestampIndex]
+        if isPrivate:
+            marketId = trade[1]
+            if marketId is not None:
+                if marketId in self.markets_by_id:
+                    market = self.markets_by_id[marketId]
+                    symbol = market['symbol']
+                else:
+                    symbol = marketId
+            orderId = str(trade[3])
+            takerOrMaker = 'maker' if (trade[8] == 1) else 'taker'
+            feeCost = trade[9]
+            feeCurrency = self.safe_currency_code(trade[10])
+            if feeCost is not None:
+                fee = {
+                    'cost': abs(feeCost),
+                    'currency': feeCurrency,
+                }
+            orderType = trade[6]
+            type = self.safe_string(self.options['orderTypes'], orderType)
+        if symbol is None:
+            if market is not None:
+                symbol = market['symbol']
+        if amount is not None:
+            side = 'sell' if (amount < 0) else 'buy'
+            amount = abs(amount)
+            if cost is None:
+                if price is not None:
+                    cost = amount * price
         return {
-            'id': str(id),
-            'info': trade,
+            'id': id,
             'timestamp': timestamp,
             'datetime': self.iso8601(timestamp),
-            'symbol': market['symbol'],
-            'type': None,
+            'symbol': symbol,
+            'order': orderId,
             'side': side,
+            'type': type,
+            'takerOrMaker': takerOrMaker,
             'price': price,
             'amount': amount,
+            'cost': cost,
+            'fee': fee,
+            'info': trade,
         }
 
-    async def fetch_trades(self, symbol, since=None, limit=120, params={}):
+    async def fetch_trades(self, symbol, since=None, limit=None, params={}):
         await self.load_markets()
         market = self.market(symbol)
         sort = '-1'
         request = {
             'symbol': market['id'],
-            'limit': limit,  # default = max = 120
         }
         if since is not None:
             request['start'] = since
             sort = '1'
+        if limit is not None:
+            request['limit'] = limit  # default 120, max 5000
         request['sort'] = sort
         response = await self.publicGetTradesSymbolHist(self.extend(request, params))
+        #
+        #     [
+        #         [
+        #             ID,
+        #             MTS,  # timestamp
+        #             AMOUNT,
+        #             PRICE
+        #         ]
+        #     ]
+        #
         trades = self.sort_by(response, 1)
         return self.parse_trades(trades, market, None, limit)
 
@@ -381,15 +537,15 @@ class bitfinex2 (bitfinex):
         await self.load_markets()
         market = self.market(symbol)
         if limit is None:
-            limit = 100
+            limit = 100  # default 100, max 5000
         if since is None:
             since = self.milliseconds() - self.parse_timeframe(timeframe) * limit * 1000
         request = {
             'symbol': market['id'],
             'timeframe': self.timeframes[timeframe],
             'sort': 1,
-            'limit': limit,
             'start': since,
+            'limit': limit,
         }
         response = await self.publicGetCandlesTradeTimeframeSymbolHist(self.extend(request, params))
         return self.parse_ohlcvs(response, market, timeframe, since, limit)
@@ -409,19 +565,23 @@ class bitfinex2 (bitfinex):
     async def withdraw(self, code, amount, address, tag=None, params={}):
         raise NotSupported(self.id + ' withdraw not implemented yet')
 
-    async def fetch_my_trades(self, symbol=None, since=None, limit=25, params={}):
+    async def fetch_my_trades(self, symbol=None, since=None, limit=None, params={}):
         await self.load_markets()
-        market = self.market(symbol)
+        market = None
         request = {
-            'symbol': market['id'],
-            'limit': limit,
-            'end': self.seconds(),
+            'end': self.milliseconds(),
         }
         if since is not None:
-            request['start'] = int(since / 1000)
-        response = await self.privatePostAuthRTradesSymbolHist(self.extend(request, params))
-        # return self.parse_trades(response, market, since, limit)  # not implemented yet for bitfinex v2
-        return response
+            request['start'] = since
+        if limit is not None:
+            request['limit'] = limit  # default 25, max 1000
+        method = 'privatePostAuthRTradesHist'
+        if symbol is not None:
+            market = self.market(symbol)
+            request['symbol'] = market['id']
+            method = 'privatePostAuthRTradesSymbolHist'
+        response = await getattr(self, method)(self.extend(request, params))
+        return self.parse_trades(response, market, since, limit)
 
     def nonce(self):
         return self.milliseconds()
@@ -433,7 +593,7 @@ class bitfinex2 (bitfinex):
             request = api + request
         else:
             request = self.version + request
-        url = self.urls['api'] + '/' + request
+        url = self.urls['api'][api] + '/' + request
         if api == 'public':
             if query:
                 url += '?' + self.urlencode(query)
@@ -441,7 +601,7 @@ class bitfinex2 (bitfinex):
             self.check_required_credentials()
             nonce = str(self.nonce())
             body = self.json(query)
-            auth = '/api' + '/' + request + nonce + body
+            auth = '/api/' + request + nonce + body
             signature = self.hmac(self.encode(auth), self.encode(self.secret), hashlib.sha384)
             headers = {
                 'bfx-nonce': nonce,
@@ -462,3 +622,255 @@ class bitfinex2 (bitfinex):
         elif response == '':
             raise ExchangeError(self.id + ' returned empty response')
         return response
+
+    def _websocket_on_message(self, contextId, data):
+        msg = json.loads(data)
+        # console.log(msg)
+        event = self.safe_string(msg, 'event')
+        if event is not None:
+            if event == 'subscribed':
+                channel = self.safe_string(msg, 'channel')
+                if channel == 'book':
+                    self._websocket_handle_subscription(contextId, 'ob', msg)
+                elif channel == 'trades':
+                    self._websocket_handle_subscription(contextId, 'trade', msg)
+            elif event == 'unsubscribed':
+                self._websocket_handle_unsubscription(contextId, msg)
+            elif event == 'error':
+                self._websocket_handle_error(contextId, msg)
+            elif event == 'info':
+                self._websocket_handle_info_version(contextId, msg)
+        else:
+            # channel data
+            chanId = msg[0]
+            data = msg[1]
+            if data == 'hb':
+                # print('heartbeat')
+                return
+            chanKey = '_' + str(chanId)
+            channels = self._contextGet(contextId, 'channels')
+            if not (chanKey in channels):
+                self.emit('err', new ExchangeError(self.id + ' msg received from unregistered channels:' + chanId), contextId)
+                return
+            symbol = channels[chanKey]['symbol']
+            event = channels[chanKey]['event']
+            if event == 'ob':
+                self._websocket_handle_order_book(contextId, symbol, msg)
+            elif event == 'trade':
+                self._websocket_handle_trade(contextId, symbol, msg)
+
+    def _websocket_handle_info_version(self, contextId, data):
+        version = self.safe_integer(data, 'version')
+        if version is not None:
+            self.websocketSendJson({
+                'event': 'conf',
+                'flags': 32768,
+            })
+            self.emit('statusok', True)
+
+    def _websocket_handle_error(self, contextId, msg):
+        channel = self.safe_string(msg, 'channel')
+        errorMsg = self.safe_string(msg, 'msg')
+        errorCode = self.safe_string(msg, 'code')
+        ex = ExchangeError(self.id + ' ' + errorCode + ':' + errorMsg)
+        if channel == 'book':
+            id = self.safe_string(msg, 'symbol')
+            symbol = self._websocketFindSymbol(id)
+            self._websocket_process_pending_nonces(contextId, 'sub-nonces', 'ob', symbol, False, ex)
+        elif channel == 'trades':
+            id = self.safe_string(msg, 'symbol')
+            symbol = self._websocketFindSymbol(id)
+            self._websocket_process_pending_nonces(contextId, 'sub-nonces', 'trade', symbol, False, ex)
+        self.emit('err', ex, contextId)
+
+    def _websocket_handle_trade(self, contextId, symbol, msg):
+        market = self.market(symbol)
+        trades = None
+        # From http://blog.bitfinex.com/api/websocket-api-update:
+        # "We are splitting the public trade messages into two: a “te” message which mimics the current behavior, and a “tu” message which will be delayed by 1-2 seconds and include the tradeId. If the tradeId is important to you, use the “tu” message. If speed is important to you, listen to the “te” message. Or of course use both if you’d like."
+        if msg[1] == 'te':
+            # te update
+            trades = [msg[2]]
+        elif msg[1] == 'tu':
+            # tu update, ignore
+            return
+        else:
+            # snapshot
+            trades = msg[1]
+        trades = self.parse_trades(trades, market)
+        for i in range(0, len(trades)):
+            self.emit('trade', symbol, trades[i])
+
+    def _websocket_handle_order_book(self, contextId, symbol, msg):
+        data = msg[1]
+        firstElement = data[0]
+        timestamp = None
+        dt = None
+        length = len(msg)
+        if length > 2:
+            timestamp = msg[2]
+            dt = self.iso8601(timestamp)
+        symbolData = self._contextGetSymbolData(contextId, 'ob', symbol)
+        if isinstance(firstElement, list):
+            # snapshot
+            symbolData['ob'] = {
+                'bids': [],
+                'asks': [],
+                'timestamp': timestamp,
+                'datetime': dt,
+                'nonce': None,
+            }
+            for i in range(0, len(data)):
+                record = data[i]
+                price = record[0]
+                c = record[1]
+                amount = record[2]
+                side = None
+                isBid = None
+                if amount > 0:
+                    side = 'bids'
+                    isBid = True
+                else:
+                    side = 'asks'
+                    isBid = False
+                    amount = -amount
+                if c == 0:
+                    # remove
+                    self.updateBidAsk([price, 0], symbolData['ob'][side], isBid)
+                else:
+                    # update
+                    self.updateBidAsk([price, amount], symbolData['ob'][side], isBid)
+        else:
+            # update
+            price = data[0]
+            c = data[1]
+            amount = data[2]
+            side = None
+            isBid = None
+            if amount > 0:
+                side = 'bids'
+                isBid = True
+            else:
+                side = 'asks'
+                isBid = False
+                amount = -amount
+            if c == 0:
+                # remove
+                self.updateBidAsk([price, 0], symbolData['ob'][side], isBid)
+            else:
+                # update
+                self.updateBidAsk([price, amount], symbolData['ob'][side], isBid)
+            symbolData['ob']['timestamp'] = timestamp
+            symbolData['ob']['datetime'] = dt
+        self.emit('ob', symbol, self._cloneOrderBook(symbolData['ob'], symbolData['limit']))
+        self._contextSetSymbolData(contextId, 'ob', symbol, symbolData)
+
+    def _websocket_process_pending_nonces(self, contextId, nonceKey, event, symbol, success, ex):
+        symbolData = self._contextGetSymbolData(contextId, event, symbol)
+        if nonceKey in symbolData:
+            nonces = symbolData[nonceKey]
+            keys = list(nonces.keys())
+            for i in range(0, len(keys)):
+                nonce = keys[i]
+                self._cancelTimeout(nonces[nonce])
+                self.emit(nonce, success, ex)
+            symbolData[nonceKey] = {}
+            self._contextSetSymbolData(contextId, event, symbol, symbolData)
+
+    def _websocket_handle_subscription(self, contextId, event, msg):
+        id = self.safe_string(msg, 'symbol')
+        symbol = self._websocketFindSymbol(id)
+        channel = self.safe_integer(msg, 'chanId')
+        chanKey = '_' + str(channel)
+        channels = self._contextGet(contextId, 'channels')
+        if channels is None:
+            channels = {}
+        channels[chanKey] = {
+            'response': msg,
+            'symbol': symbol,
+            'event': event,
+        }
+        self._contextSet(contextId, 'channels', channels)
+        symbolData = self._contextGetSymbolData(contextId, event, symbol)
+        symbolData['channelId'] = channel
+        self._contextSetSymbolData(contextId, event, symbol, symbolData)
+        if event == 'ob':
+            self._websocket_process_pending_nonces(contextId, 'sub-nonces', 'ob', symbol, True, None)
+        elif event == 'trade':
+            self._websocket_process_pending_nonces(contextId, 'sub-nonces', 'trade', symbol, True, None)
+
+    def _websocket_handle_unsubscription(self, contextId, msg):
+        status = self.safe_string(msg, 'status')
+        if status == 'OK':
+            chanId = self.safe_integer(msg, 'chanId')
+            chanKey = '_' + str(chanId)
+            channels = self._contextGet(contextId, 'channels')
+            if not (chanKey in channels):
+                self.emit('err', new ExchangeError(self.id + ' msg received from unregistered channels:' + chanId), contextId)
+                return
+            symbol = channels[chanKey]['symbol']
+            event = channels[chanKey]['event']
+            # remove channel ids ?
+            self.omit(channels, chanKey)
+            self._contextSet(contextId, 'channels', channels)
+            self._websocket_process_pending_nonces(contextId, 'unsub-nonces', event, symbol, True, None)
+
+    def _websocket_subscribe(self, contextId, event, symbol, nonce, params={}):
+        if event != 'ob' and event != 'trade':
+            raise NotSupported('subscribe ' + event + '(' + symbol + ') not supported for exchange ' + self.id)
+        # save nonce for subscription response
+        symbolData = self._contextGetSymbolData(contextId, event, symbol)
+        if not ('sub-nonces' in symbolData):
+            symbolData['sub-nonces'] = {}
+        symbolData['limit'] = self.safe_integer(params, 'limit', None)
+        nonceStr = str(nonce)
+        handle = self._setTimeout(contextId, self.timeout, self._websocketMethodMap('_websocketTimeoutRemoveNonce'), [contextId, nonceStr, event, symbol, 'sub-nonce'])
+        symbolData['sub-nonces'][nonceStr] = handle
+        self._contextSetSymbolData(contextId, event, symbol, symbolData)
+        # send request
+        id = self.market_id(symbol)
+        if event == 'ob':
+            self.websocketSendJson({
+                'event': 'subscribe',
+                'channel': 'book',
+                'symbol': id,
+                'prec': 'P0',
+                'freq': 'F0',
+                'len': '100',
+            })
+        elif event == 'trade':
+            self.websocketSendJson({
+                'event': 'subscribe',
+                'channel': 'trades',
+                'symbol': id,
+            })
+
+    def _websocket_unsubscribe(self, contextId, event, symbol, nonce, params={}):
+        if event != 'ob' and event != 'trade':
+            raise NotSupported('unsubscribe ' + event + '(' + symbol + ') not supported for exchange ' + self.id)
+        symbolData = self._contextGetSymbolData(contextId, event, symbol)
+        payload = {
+            'event': 'unsubscribe',
+            'chanId': symbolData['channelId'],
+        }
+        if not ('unsub-nonces' in symbolData):
+            symbolData['unsub-nonces'] = {}
+        nonceStr = str(nonce)
+        handle = self._setTimeout(contextId, self.timeout, self._websocketMethodMap('_websocketTimeoutRemoveNonce'), [contextId, nonceStr, event, symbol, 'unsub-nonces'])
+        symbolData['unsub-nonces'][nonceStr] = handle
+        self._contextSetSymbolData(contextId, event, symbol, symbolData)
+        self.websocketSendJson(payload)
+
+    def _websocket_timeout_remove_nonce(self, contextId, timerNonce, event, symbol, key):
+        symbolData = self._contextGetSymbolData(contextId, event, symbol)
+        if key in symbolData:
+            nonces = symbolData[key]
+            if timerNonce in nonces:
+                self.omit(symbolData[key], timerNonce)
+                self._contextSetSymbolData(contextId, event, symbol, symbolData)
+
+    def _get_current_websocket_orderbook(self, contextId, symbol, limit):
+        data = self._contextGetSymbolData(contextId, 'ob', symbol)
+        if ('ob' in data) and (data['ob'] is not None):
+            return self._cloneOrderBook(data['ob'], limit)
+        return None

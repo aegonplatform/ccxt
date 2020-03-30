@@ -4,15 +4,19 @@
 # https://github.com/ccxt/ccxt/blob/master/CONTRIBUTING.md#how-to-contribute-code
 
 from ccxt.async_support.base.exchange import Exchange
+import json
 from ccxt.base.errors import ExchangeError
 from ccxt.base.errors import PermissionDenied
 from ccxt.base.errors import InsufficientFunds
 from ccxt.base.errors import InvalidAddress
 from ccxt.base.errors import InvalidOrder
+from ccxt.base.errors import OrderNotFound
+from ccxt.base.errors import NotSupported
 from ccxt.base.errors import InvalidNonce
+from ccxt.base.errors import RequestTimeout
 
 
-class cobinhood (Exchange):
+class cobinhood(Exchange):
 
     def describe(self):
         return self.deep_extend(super(cobinhood, self).describe(), {
@@ -57,6 +61,7 @@ class cobinhood (Exchange):
                 '1M': '1M',
             },
             'urls': {
+                'referral': 'https://cobinhood.com?referrerId=a9d57842-99bb-4d7c-b668-0479a15a458b',
                 'logo': 'https://user-images.githubusercontent.com/1294454/35755576-dee02e5c-0878-11e8-989f-1595d80ba47f.jpg',
                 'api': 'https://api.cobinhood.com',
                 'www': 'https://cobinhood.com',
@@ -187,10 +192,54 @@ class cobinhood (Exchange):
                 'invalid_nonce': InvalidNonce,
                 'unauthorized_scope': PermissionDenied,
                 'invalid_address': InvalidAddress,
+                'parameter_error': OrderNotFound,
             },
             'commonCurrencies': {
                 'SMT': 'SocialMedia.Market',
                 'MTN': 'Motion Token',
+            },
+            'wsconf': {
+                'conx-tpls': {
+                    'default': {
+                        'type': 'ws',
+                        'baseurl': 'wss://ws.cobinhood.com/v2/ws',
+                    },
+                },
+                'methodmap': {
+                    '_websocketSendHeartbeat': '_websocketSendHeartbeat',
+                    '_websocketTimeoutRemoveNonce': '_websocketTimeoutRemoveNonce',
+                    '_websocketPongTimeout': '_websocketPongTimeout',
+                },
+                'events': {
+                    'ob': {
+                        'conx-tpl': 'default',
+                        'conx-param': {
+                            'url': '{baseurl}',
+                            'id': '{id}',
+                        },
+                    },
+                    'ticker': {
+                        'conx-tpl': 'default',
+                        'conx-param': {
+                            'url': '{baseurl}',
+                            'id': '{id}',
+                        },
+                    },
+                    'ohlcv': {
+                        'conx-tpl': 'default',
+                        'conx-param': {
+                            'url': '{baseurl}',
+                            'id': '{id}',
+                        },
+                    },
+                    'trade': {
+                        'conx-tpl': 'default',
+                        'conx-param': {
+                            'url': '{baseurl}',
+                            'id': '{id}',
+                        },
+                    },
+                },
             },
         })
 
@@ -200,13 +249,14 @@ class cobinhood (Exchange):
         result = {}
         for i in range(0, len(currencies)):
             currency = currencies[i]
-            id = currency['currency']
-            code = self.common_currency_code(id)
+            id = self.safe_string(currency, 'currency')
+            name = self.safe_string(currency, 'name')
+            code = self.safe_currency_code(id)
             minUnit = self.safe_float(currency, 'min_unit')
             result[code] = {
                 'id': id,
                 'code': code,
-                'name': currency['name'],
+                'name': name,
                 'active': True,
                 'fiat': False,
                 'precision': self.precision_from_string(currency['min_unit']),
@@ -241,15 +291,15 @@ class cobinhood (Exchange):
         return result
 
     async def fetch_markets(self, params={}):
-        response = await self.publicGetMarketTradingPairs()
-        markets = response['result']['trading_pairs']
+        response = await self.publicGetMarketTradingPairs(params)
+        markets = self.safe_value(response['result'], 'trading_pairs')
         result = []
         for i in range(0, len(markets)):
             market = markets[i]
-            id = market['id']
+            id = self.safe_string(market, 'id')
             baseId, quoteId = id.split('-')
-            base = self.common_currency_code(baseId)
-            quote = self.common_currency_code(quoteId)
+            base = self.safe_currency_code(baseId)
+            quote = self.safe_currency_code(quoteId)
             symbol = base + '/' + quote
             precision = {
                 'amount': 8,
@@ -291,8 +341,8 @@ class cobinhood (Exchange):
                 market = self.markets_by_id[marketId]
             else:
                 baseId, quoteId = marketId.split('-')
-                base = self.common_currency_code(baseId)
-                quote = self.common_currency_code(quoteId)
+                base = self.safe_currency_code(baseId)
+                quote = self.safe_currency_code(quoteId)
                 symbol = base + '/' + quote
         if market is not None:
             symbol = market['symbol']
@@ -324,16 +374,17 @@ class cobinhood (Exchange):
     async def fetch_ticker(self, symbol, params={}):
         await self.load_markets()
         market = self.market(symbol)
-        response = await self.publicGetMarketTickersTradingPairId(self.extend({
+        request = {
             'trading_pair_id': market['id'],
-        }, params))
-        ticker = response['result']['ticker']
+        }
+        response = await self.publicGetMarketTickersTradingPairId(self.extend(request, params))
+        ticker = self.safe_value(response['result'], 'ticker')
         return self.parse_ticker(ticker, market)
 
     async def fetch_tickers(self, symbols=None, params={}):
         await self.load_markets()
         response = await self.publicGetMarketTickers(params)
-        tickers = response['result']['tickers']
+        tickers = self.safe_value(response['result'], 'tickers')
         result = []
         for i in range(0, len(tickers)):
             result.append(self.parse_ticker(tickers[i]))
@@ -353,25 +404,30 @@ class cobinhood (Exchange):
         symbol = None
         if market:
             symbol = market['symbol']
-        timestamp = trade['timestamp']
+        timestamp = self.safe_integer(trade, 'timestamp')
         price = self.safe_float(trade, 'price')
         amount = self.safe_float(trade, 'size')
-        cost = price * amount
+        cost = None
+        if price is not None:
+            if amount is not None:
+                cost = price * amount
         # you can't determine your side from maker/taker side and vice versa
         # you can't determine if your order/trade was a maker or a taker based
         # on just the side of your order/trade
         # https://github.com/ccxt/ccxt/issues/4300
         # side = 'sell' if (trade['maker_side'] == 'bid') else 'buy'
         side = None
+        id = self.safe_string(trade, 'id')
         return {
             'info': trade,
             'timestamp': timestamp,
             'datetime': self.iso8601(timestamp),
             'symbol': symbol,
-            'id': trade['id'],
+            'id': id,
             'order': None,
             'type': None,
             'side': side,
+            'takerOrMaker': None,
             'price': price,
             'amount': amount,
             'cost': cost,
@@ -381,11 +437,12 @@ class cobinhood (Exchange):
     async def fetch_trades(self, symbol, since=None, limit=50, params={}):
         await self.load_markets()
         market = self.market(symbol)
-        response = await self.publicGetMarketTradesTradingPairId(self.extend({
+        request = {
             'trading_pair_id': market['id'],
             'limit': limit,  # default 20, but that seems too little
-        }, params))
-        trades = response['result']['trades']
+        }
+        response = await self.publicGetMarketTradesTradingPairId(self.extend(request, params))
+        trades = self.safe_value(response['result'], 'trades')
         return self.parse_trades(trades, market, since, limit)
 
     def parse_ohlcv(self, ohlcv, market=None, timeframe='5m', since=None, limit=None):
@@ -421,25 +478,22 @@ class cobinhood (Exchange):
         if since is not None:
             request['start_time'] = since
         response = await self.publicGetChartCandlesTradingPairId(self.extend(request, params))
-        ohlcv = response['result']['candles']
+        ohlcv = self.safe_value(response['result'], 'candles')
         return self.parse_ohlcvs(ohlcv, market, timeframe, since, limit)
 
     async def fetch_balance(self, params={}):
         await self.load_markets()
         response = await self.privateGetWalletBalances(params)
         result = {'info': response}
-        balances = response['result']['balances']
+        balances = self.safe_value(response['result'], 'balances')
         for i in range(0, len(balances)):
             balance = balances[i]
-            currency = balance['currency']
-            if currency in self.currencies_by_id:
-                currency = self.currencies_by_id[currency]['code']
-            account = {
-                'used': float(balance['on_order']),
-                'total': float(balance['total']),
-            }
-            account['free'] = float(account['total'] - account['used'])
-            result[currency] = account
+            currencyId = self.safe_string(balance, 'currency')
+            code = self.safe_currency_code(currencyId)
+            account = self.account()
+            account['used'] = self.safe_float(balance, 'on_order')
+            account['total'] = self.safe_float(balance, 'total')
+            result[code] = account
         return self.parse_balance(result)
 
     def parse_order_status(self, status):
@@ -455,9 +509,7 @@ class cobinhood (Exchange):
             'cancelled': 'canceled',
             'triggered': 'triggered',
         }
-        if status in statuses:
-            return statuses[status]
-        return status
+        return self.safe_string(statuses, status, status)
 
     def parse_order(self, order, market=None):
         #
@@ -542,29 +594,32 @@ class cobinhood (Exchange):
 
     async def edit_order(self, id, symbol, type, side, amount, price, params={}):
         await self.load_markets()
-        response = await self.privatePutTradingOrdersOrderId(self.extend({
+        request = {
             'order_id': id,
             'price': self.price_to_precision(symbol, price),
             'size': self.amount_to_precision(symbol, amount),
-        }, params))
+        }
+        response = await self.privatePutTradingOrdersOrderId(self.extend(request, params))
         return self.parse_order(self.extend(response, {
             'id': id,
         }))
 
     async def cancel_order(self, id, symbol=None, params={}):
         await self.load_markets()
-        response = await self.privateDeleteTradingOrdersOrderId(self.extend({
+        request = {
             'order_id': id,
-        }, params))
+        }
+        response = await self.privateDeleteTradingOrdersOrderId(self.extend(request, params))
         return self.parse_order(self.extend(response, {
             'id': id,
         }))
 
     async def fetch_order(self, id, symbol=None, params={}):
         await self.load_markets()
-        response = await self.privateGetTradingOrdersOrderId(self.extend({
+        request = {
             'order_id': str(id),
-        }, params))
+        }
+        response = await self.privateGetTradingOrdersOrderId(self.extend(request, params))
         return self.parse_order(response['result']['order'])
 
     async def fetch_open_orders(self, symbol=None, since=None, limit=None, params={}):
@@ -577,17 +632,25 @@ class cobinhood (Exchange):
 
     async def fetch_closed_orders(self, symbol=None, since=None, limit=None, params={}):
         await self.load_markets()
-        result = await self.privateGetTradingOrderHistory(params)
-        orders = self.parse_orders(result['result']['orders'], None, since, limit)
+        request = {}
+        market = None
+        if symbol is not None:
+            market = self.market(symbol)
+            request['trading_pair_id'] = market['id']
+        if limit is not None:
+            request['limit'] = limit  # default 50, max 100
+        response = await self.privateGetTradingOrderHistory(self.extend(request, params))
+        orders = self.parse_orders(response['result']['orders'], market, since, limit)
         if symbol is not None:
             return self.filter_by_symbol_since_limit(orders, symbol, since, limit)
         return self.filter_by_since_limit(orders, since, limit)
 
     async def fetch_order_trades(self, id, symbol=None, since=None, limit=None, params={}):
         await self.load_markets()
-        response = await self.privateGetTradingOrdersOrderIdTrades(self.extend({
+        request = {
             'order_id': id,
-        }, params))
+        }
+        response = await self.privateGetTradingOrdersOrderIdTrades(self.extend(request, params))
         market = None if (symbol is None) else self.market(symbol)
         return self.parse_trades(response['result']['trades'], market)
 
@@ -623,9 +686,10 @@ class cobinhood (Exchange):
     async def fetch_deposit_address(self, code, params={}):
         await self.load_markets()
         currency = self.currency(code)
-        response = await self.privateGetWalletDepositAddresses(self.extend({
+        request = {
             'currency': currency['id'],
-        }, params))
+        }
+        response = await self.privateGetWalletDepositAddresses(self.extend(request, params))
         #
         #     {success:    True,
         #        result: {deposit_addresses: [{      address: "abcdefg",
@@ -633,7 +697,7 @@ class cobinhood (Exchange):
         #                                            created_at:  1536768050235,
         #                                              currency: "EOS",
         #                                                  memo: "12345678",
-        #                                                  type: "exchange"      }]} }
+        #                                                  type: "exchange"      }]}}
         #
         addresses = self.safe_value(response['result'], 'deposit_addresses', [])
         address = None
@@ -668,24 +732,24 @@ class cobinhood (Exchange):
     async def fetch_deposits(self, code=None, since=None, limit=None, params={}):
         await self.load_markets()
         if code is None:
-            raise ExchangeError(self.id + ' fetchDeposits() requires a currency code arguemnt')
+            raise ExchangeError(self.id + ' fetchDeposits() requires a currency code argument')
         currency = self.currency(code)
         request = {
             'currency': currency['id'],
         }
         response = await self.privateGetWalletDeposits(self.extend(request, params))
-        return self.parseTransactions(response['result']['deposits'], currency)
+        return self.parse_transactions(response['result']['deposits'], currency)
 
     async def fetch_withdrawals(self, code=None, since=None, limit=None, params={}):
         await self.load_markets()
         if code is None:
-            raise ExchangeError(self.id + ' fetchWithdrawals() requires a currency code arguemnt')
+            raise ExchangeError(self.id + ' fetchWithdrawals() requires a currency code argument')
         currency = self.currency(code)
         request = {
             'currency': currency['id'],
         }
         response = await self.privateGetWalletWithdrawals(self.extend(request, params))
-        return self.parseTransactions(response['result']['withdrawals'], currency)
+        return self.parse_transactions(response['result']['withdrawals'], currency)
 
     def parse_transaction_status(self, status):
         statuses = {
@@ -702,19 +766,12 @@ class cobinhood (Exchange):
             'tx_rejected': 'failed',
             'tx_confirmed': 'ok',
         }
-        return statuses[status] if (status in list(statuses.keys())) else status
+        return self.safe_string(statuses, status, status)
 
     def parse_transaction(self, transaction, currency=None):
         timestamp = self.safe_integer(transaction, 'created_at')
-        code = None
-        if currency is None:
-            currencyId = self.safe_string(transaction, 'currency')
-            if currencyId in self.currencies_by_id:
-                currency = self.currencies_by_id[currencyId]
-            else:
-                code = self.common_currency_code(currencyId)
-        if currency is not None:
-            code = currency['code']
+        currencyId = self.safe_string(transaction, 'currency')
+        code = self.safe_currency_code(currencyId, currency)
         id = None
         withdrawalId = self.safe_string(transaction, 'withdrawal_id')
         depositId = self.safe_string(transaction, 'deposit_id')
@@ -763,11 +820,11 @@ class cobinhood (Exchange):
             if len(query):
                 url += '?' + query
         else:
-            headers['Content-type'] = 'application/json charset=UTF-8'
+            headers['Content-type'] = 'application/json; charset=UTF-8'
             body = self.json(query)
         return {'url': url, 'method': method, 'body': body, 'headers': headers}
 
-    def handle_errors(self, code, reason, url, method, headers, body, response):
+    def handle_errors(self, code, reason, url, method, headers, body, response, requestHeaders, requestBody):
         if code < 400 or code >= 600:
             return
         if body[0] != '{':
@@ -780,10 +837,299 @@ class cobinhood (Exchange):
                     # Cobinhood returns vague "parameter_error" on fetchOrder() and cancelOrder() calls
                     # for invalid order IDs as well as orders that are not "open"
                     raise InvalidOrder(feedback)
-        exceptions = self.exceptions
-        if errorCode in exceptions:
-            raise exceptions[errorCode](feedback)
+        self.throw_exactly_matched_exception(self.exceptions, errorCode, feedback)
         raise ExchangeError(feedback)
 
     def nonce(self):
         return self.milliseconds()
+
+    def _websocket_on_message(self, contextId, data):
+        msg = json.loads(data)
+        # console.log(msg)
+        h = self.safe_value(msg, 'h', ['', '', ''])
+        channel = h[0]
+        version = h[1]
+        type = h[2]
+        if version != '2':
+            self.emit('err', new ExchangeError(self.id + ' version response :' + version + ' != 2'), contextId)
+            return
+        parts = channel.split('.')
+        id = parts[1]
+        symbol = self._websocketFindSymbol(id)
+        if type == 'error':
+            self.emit('err', new ExchangeError(self.id + ' error ' + h[3] + ':' + h[4]))
+        elif type == 'pong':
+            pongTimeout = self._contextGet(contextId, 'pongtimeout')
+            self._cancelTimeout(pongTimeout)
+            self.emit('pong')
+        elif channel.find('order-book.') >= 0:
+            if type == 'subscribed':
+                self._websocket_handle_subscription(contextId, 'ob', msg, symbol)
+            elif type == 'unsubscribed':
+                self._websocket_handle_unsubscription(contextId, 'ob', msg, symbol)
+            elif type == 's':
+                self._websocket_handle_order_book_snapshot(contextId, symbol, msg)
+            elif type == 'u':
+                self._websocket_handle_order_book_update(contextId, symbol, msg)
+            else:
+                self.emit('err', new ExchangeError(self.id + ' invalid orderbook message :' + type), contextId)
+        elif channel.find('ticker.') >= 0:
+            if type == 'subscribed':
+                self._websocket_handle_subscription(contextId, 'ticker', msg, symbol)
+            elif type == 'unsubscribed':
+                self._websocket_handle_unsubscription(contextId, 'ticker', msg, symbol)
+            elif type == 's':
+                # snapshot???
+                self._websocket_handle_ticker(contextId, symbol, msg)
+            elif type == 'u':
+                self._websocket_handle_ticker(contextId, symbol, msg)
+            else:
+                self.emit('err', new ExchangeError(self.id + ' invalid ticker message :' + type), contextId)
+        elif channel.find('trade.') >= 0:
+            if type == 'subscribed':
+                self._websocket_handle_subscription(contextId, 'trade', msg, symbol)
+            elif type == 'unsubscribed':
+                self._websocket_handle_unsubscription(contextId, 'trade', msg, symbol)
+            elif type == 's':
+                # snapshot???
+                self._websocket_handle_trade(contextId, symbol, msg)
+            elif type == 'u':
+                self._websocket_handle_trade(contextId, symbol, msg)
+            else:
+                self.emit('err', new ExchangeError(self.id + ' invalid trade message :' + type), contextId)
+        elif channel.find('candle.') >= 0:
+            if type == 'subscribed':
+                self._websocket_handle_subscription(contextId, 'ohlcv', msg, symbol)
+            elif type == 'unsubscribed':
+                self._websocket_handle_unsubscription(contextId, 'ohlcv', msg, symbol)
+            elif type == 's':
+                # snapshot???
+                self._websocket_handle_ohlcv(contextId, symbol, msg)
+            elif type == 'u':
+                self._websocket_handle_ohlcv(contextId, symbol, msg)
+            else:
+                self.emit('err', new ExchangeError(self.id + ' invalid ohlcv message :' + type), contextId)
+
+    def _websocket_on_open(self, contextId, params):
+        heartbeatTimer = self._contextGet(contextId, 'heartbeattimer')
+        if heartbeatTimer is not None:
+            self._cancelTimer(heartbeatTimer)
+        heartbeatTimer = self._setTimer(contextId, 60000, self._websocketMethodMap('_websocketSendHeartbeat'), [contextId])
+        self._contextSet(contextId, 'heartbeattimer', heartbeatTimer)
+
+    def _websocket_on_close(self, contextId):
+        heartbeatTimer = self._contextGet(contextId, 'heartbeattimer')
+        if heartbeatTimer is not None:
+            self._cancelTimer(heartbeatTimer)
+
+    def _websocket_pong_timeout(self, contextId):
+        ex = RequestTimeout(self.id + ' does not received pong message after 30 seconds')
+        self.emit('err', ex, contextId)
+
+    def _websocket_send_heartbeat(self, contextId):
+        pongTimeout = self._setTimeout(contextId, 30000, self._websocketMethodMap('_websocketPongTimeout'), [contextId])
+        self._contextSet(contextId, 'pongtimeout', pongTimeout)
+        self.websocketSendJson({
+            'action': 'ping',
+        }, contextId)
+
+    def _websocket_handle_order_book_snapshot(self, contextId, symbol, msg):
+        d = self.safe_value(msg, 'd', {
+            'bids': [],
+            'asks': [],
+        })
+        ob = self.parse_order_book(d, None, 'bids', 'asks', 0, 2)
+        symbolData = self._contextGetSymbolData(contextId, 'ob', symbol)
+        symbolData['ob'] = ob
+        self._contextSetSymbolData(contextId, 'ob', symbol, symbolData)
+        self.emit('ob', symbol, self._cloneOrderBook(symbolData['ob'], symbolData['limit']))
+
+    def _websocket_handle_order_book_update(self, contextId, symbol, msg):
+        d = self.safe_value(msg, 'd', {
+            'bids': [],
+            'asks': [],
+        })
+        delta = self.parse_order_book(d, None, 'bids', 'asks', 0, 2)
+        symbolData = self._contextGetSymbolData(contextId, 'ob', symbol)
+        symbolData['ob'] = self.mergeOrderBookDeltaDiff(symbolData['ob'], delta)
+        self._contextSetSymbolData(contextId, 'ob', symbol, symbolData)
+        self.emit('ob', symbol, self._cloneOrderBook(symbolData['ob'], symbolData['limit']))
+
+    def _websocket_handle_ticker(self, contextId, symbol, msg):
+        d = self.safe_value(msg, 'd')
+        timestamp = int(d[0])
+        highestBid = float(d[1])
+        lowestAsk = float(d[2])
+        _24hVolume = float(d[3])
+        _24hLow = float(d[4])
+        _24High = float(d[5])
+        _24hOpen = float(d[6])
+        lastTradePrice = float(d[7])
+        t = {
+            'symbol': symbol,
+            'timestamp': timestamp,
+            'datetime': self.iso8601(timestamp),
+            'high': _24High,
+            'low': _24hLow,
+            'bid': highestBid,
+            'bidVolume': None,
+            'ask': lowestAsk,
+            'askVolume': None,
+            'vwap': None,
+            'open': _24hOpen,
+            'close': lastTradePrice,
+            'last': lastTradePrice,
+            'previousClose': None,
+            'change': None,
+            'percentage': None,
+            'average': None,
+            'baseVolume': _24hVolume,
+            'quoteVolume': None,
+            'info': d,
+        }
+        self.emit('ticker', symbol, t)
+
+    def _websocket_handle_trade(self, contextId, symbol, msg):
+        data = self.safe_value(msg, 'd')
+        if not isinstance(data, list):
+            data = [data]
+        trades = []
+        for i in range(0, len(data)):
+            d = data[i]
+            tradeId = d[0]
+            timestamp = int(d[1])
+            makerSide = d[2]
+            price = float(d[3])
+            amount = float(d[4])
+            cost = price * amount
+            side = 'sell' if (makerSide == 'bid') else 'buy'
+            t = {
+                'info': d,
+                'timestamp': timestamp,
+                'datetime': self.iso8601(timestamp),
+                'symbol': symbol,
+                'id': tradeId,
+                'order': None,
+                'type': None,
+                'side': side,
+                'price': price,
+                'amount': amount,
+                'cost': cost,
+                'fee': None,
+            }
+            trades.append(t)
+        self.emit('trade', symbol, trades)
+
+    def _websocket_handle_ohlcv(self, contextId, symbol, msg):
+        data = self.safe_value(msg, 'd')
+        if not isinstance(data, list):
+            data = [data]
+        dl = len(data)  # Transpiler is bugged
+        if dl != 1:
+            return None
+        d = data[dl - 1]
+        timestamp = int(d[0])
+        volume = float(d[1])
+        high = float(d[2])
+        low = float(d[3])
+        open = float(d[4])
+        close = float(d[5])
+        o = [
+            timestamp,
+            open,
+            high,
+            low,
+            close,
+            volume,
+        ]
+        self.emit('ohlcv', symbol, o)
+
+    def _websocket_process_pending_nonces(self, contextId, nonceKey, event, symbol, success, ex):
+        symbolData = self._contextGetSymbolData(contextId, event, symbol)
+        if nonceKey in symbolData:
+            nonces = symbolData[nonceKey]
+            keys = list(nonces.keys())
+            for i in range(0, len(keys)):
+                nonce = keys[i]
+                self._cancelTimeout(nonces[nonce])
+                self.emit(nonce, success, ex)
+            symbolData[nonceKey] = {}
+            self._contextSetSymbolData(contextId, event, symbol, symbolData)
+
+    def _websocket_handle_subscription(self, contextId, event, msg, symbol):
+        self._websocket_process_pending_nonces(contextId, 'sub-nonces', event, symbol, True, None)
+
+    def _websocket_handle_unsubscription(self, contextId, event, msg, symbol):
+        self._websocket_process_pending_nonces(contextId, 'unsub-nonces', event, symbol, True, None)
+
+    def _websocket_subscribe(self, contextId, event, symbol, nonce, params={}):
+        if (event != 'ob') and (event != 'ticker') and (event != 'trade') and (event != 'ohlcv'):
+            raise NotSupported('subscribe ' + event + '(' + symbol + ') not supported for exchange ' + self.id)
+        # save nonce for subscription response
+        symbolData = self._contextGetSymbolData(contextId, event, symbol)
+        if not ('sub-nonces' in symbolData):
+            symbolData['sub-nonces'] = {}
+        id = self.market_id(symbol)
+        payload = {
+            'action': 'subscribe',
+            'trading_pair_id': id,
+        }
+        if event == 'ob':
+            symbolData['limit'] = self.safe_integer(params, 'limit', None)
+            symbolData['precision'] = self.safe_integer(params, 'precision', '1E-6')
+            payload['precision'] = symbolData['precision']
+            payload['type'] = 'order-book'
+        elif event == 'ticker':
+            payload['type'] = 'ticker'
+        elif event == 'trade':
+            payload['type'] = 'trade'
+        elif event == 'ohlcv':
+            symbolData['timeframe'] = self.safe_integer(params, 'timeframe', '1m')
+            payload['type'] = 'candle'
+            payload['timeframe'] = symbolData['timeframe']
+        nonceStr = str(nonce)
+        handle = self._setTimeout(contextId, self.timeout, self._websocketMethodMap('_websocketTimeoutRemoveNonce'), [contextId, nonceStr, event, symbol, 'sub-nonce'])
+        symbolData['sub-nonces'][nonceStr] = handle
+        self._contextSetSymbolData(contextId, event, symbol, symbolData)
+        # send request
+        self.websocketSendJson(payload)
+
+    def _websocket_unsubscribe(self, contextId, event, symbol, nonce, params={}):
+        if (event != 'ob') and (event != 'ticker') and (event != 'trade') and (event != 'ohlcv'):
+            raise NotSupported('unsubscribe ' + event + '(' + symbol + ') not supported for exchange ' + self.id)
+        symbolData = self._contextGetSymbolData(contextId, event, symbol)
+        if not ('unsub-nonces' in symbolData):
+            symbolData['unsub-nonces'] = {}
+        nonceStr = str(nonce)
+        handle = self._setTimeout(contextId, self.timeout, self._websocketMethodMap('_websocketTimeoutRemoveNonce'), [contextId, nonceStr, event, symbol, 'unsub-nonces'])
+        symbolData['unsub-nonces'][nonceStr] = handle
+        self._contextSetSymbolData(contextId, event, symbol, symbolData)
+        type = None
+        if event == 'ob':
+            type = 'order-book'
+        elif event == 'ticker':
+            type = 'ticker'
+        elif event == 'trade':
+            type = 'trade'
+        elif event == 'ohlcv':
+            type = 'candle'
+        id = self.market_id(symbol)
+        self.websocketSendJson({
+            'action': 'unsubscribe',
+            'type': type,
+            'trading_pair_id': id,
+        })
+
+    def _websocket_timeout_remove_nonce(self, contextId, timerNonce, event, symbol, key):
+        symbolData = self._contextGetSymbolData(contextId, event, symbol)
+        if key in symbolData:
+            nonces = symbolData[key]
+            if timerNonce in nonces:
+                self.omit(symbolData[key], timerNonce)
+                self._contextSetSymbolData(contextId, event, symbol, symbolData)
+
+    def _get_current_websocket_orderbook(self, contextId, symbol, limit):
+        data = self._contextGetSymbolData(contextId, 'ob', symbol)
+        if ('ob' in data) and (data['ob'] is not None):
+            return self._cloneOrderBook(data['ob'], limit)
+        return None

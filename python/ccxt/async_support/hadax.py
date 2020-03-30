@@ -7,7 +7,7 @@ from ccxt.async_support.huobipro import huobipro
 from ccxt.base.errors import PermissionDenied
 
 
-class hadax (huobipro):
+class hadax(huobipro):
 
     def describe(self):
         return self.deep_extend(super(hadax, self).describe(), {
@@ -81,5 +81,22 @@ class hadax (huobipro):
                 'FAIR': 'FairGame',
                 'GET': 'Themis',
                 'HOT': 'Hydro Protocol',
+            },
+            'wsconf': {
+                'conx-tpls': {
+                    'default': {
+                        'type': 'ws',
+                        'baseurl': 'wss://api.hadax.com/ws',
+                    },
+                },
+                'events': {
+                    'ob': {
+                        'conx-tpl': 'default',
+                        'conx-param': {
+                            'url': '{baseurl}',
+                            'id': '{id}',
+                        },
+                    },
+                },
             },
         })
