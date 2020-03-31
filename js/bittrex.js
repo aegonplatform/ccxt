@@ -365,7 +365,7 @@ module.exports = class bittrex extends Exchange {
                         'max': undefined,
                     },
                     'cost': {
-                        'min': -1 * Math.log10(precision['amount']),
+                        'min': this.safeFloat(market, 'minTradeSize') * Math.pow(10, -precision['price']),
                         'max': undefined,
                     },
                 },
