@@ -1835,8 +1835,8 @@ module.exports = class binance extends Exchange {
                 }
                 symbolData['failCount'] = symbolData['failCount'] + 1;
                 if (symbolData['failCount'] > 5) {
-                    this.emit('err', new ExchangeError(this.id + ': max deltas failCount reached for symbol ' + symbol));
-                    this.websocketClose(contextId);
+                    this.emit('err', new ExchangeError(this.id + ': max deltas failCount reached for symbol ' + symbol), symbol);
+                    // this.websocketClose(contextId);
                 } else {
                     // Launch again
                     symbolData = this.omit(symbolData, 'ob');
@@ -1942,8 +1942,8 @@ module.exports = class binance extends Exchange {
                 if ((U <= lastUpdateId + 1) && (u >= lastUpdateId + 1)) {
                     break;
                 }
-                this.emit('err', new ExchangeError(this.id + ': error in update ids in deltas for ' + symbol));
-                this.websocketClose(contextId);
+                this.emit('err', new ExchangeError(this.id + ': error in update ids in deltas for ' + symbol), symbol);
+                // this.websocketClose(contextId);
                 return;
             }
             // process orderbook
